@@ -177,6 +177,73 @@ func TestReportedExitPreservesUnreadMessages(t *testing.T) {
 	}
 }
 
+func TestReopenPreservesLeaseMailboxScheduleAndJournal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "polis.db")
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.now = func() time.Time { return now }
+	if _, err := st.CreateAgent("alpha", "Persist.", []string{"runtime"}, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := st.Acquire("worker-1", 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	immediate, err := st.SendMessage("alpha", "operator", json.RawMessage(`{"work":"now"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ScheduleMessage(lease.Token, now.Add(10*time.Second), json.RawMessage(`{"work":"later"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Journal(lease.Token, "before.restart", json.RawMessage(`{"durable":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	reopened.now = func() time.Time { return now }
+	self, err := reopened.Self(lease.Token)
+	if err != nil || self.ID != "alpha" {
+		t.Fatalf("reopened lease = %#v, %v", self, err)
+	}
+	if heartbeat, err := reopened.Heartbeat(lease.Token, 30*time.Second); err != nil || !heartbeat.Continue {
+		t.Fatalf("reopened heartbeat = %#v, %v", heartbeat, err)
+	}
+	messages, err := reopened.Messages(lease.Token, 100)
+	if err != nil || len(messages) != 1 || messages[0].ID != immediate.ID {
+		t.Fatalf("reopened mailbox = %#v, %v", messages, err)
+	}
+	events, err := reopened.Events("alpha", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundJournal := false
+	for _, event := range events {
+		if event.Kind == "before.restart" {
+			foundJournal = true
+		}
+	}
+	if !foundJournal {
+		t.Fatalf("reopened journal = %#v", events)
+	}
+
+	now = now.Add(10 * time.Second)
+	messages, err = reopened.Messages(lease.Token, 100)
+	if err != nil || len(messages) != 2 || messages[0].ID != immediate.ID || messages[1].Sender != "agent:alpha" {
+		t.Fatalf("reopened scheduled delivery = %#v, %v", messages, err)
+	}
+}
+
 func TestAgentCanJournalMessageAndSpawn(t *testing.T) {
 	st := openTestStore(t)
 	if _, err := st.CreateAgent("parent", "Delegate freely.", []string{"runtime"}, "operator"); err != nil {

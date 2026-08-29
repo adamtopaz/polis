@@ -12,6 +12,7 @@ import {
 import { loadConfig } from "./config.js";
 import { PolisApiError, PolisClient } from "./polis.js";
 import { polisSystemPrompt, polisTurnPrompt } from "./prompt.js";
+import { withControllerRetry } from "./retry.js";
 
 let stopping = false;
 let abortActiveSession: (() => Promise<void>) | undefined;
@@ -33,9 +34,14 @@ async function main(): Promise<void> {
   ]);
 
   const polis = new PolisClient(config.polisUrl, config.agentToken);
+  const callPolis = <T>(operation: () => Promise<T>): Promise<T> => withControllerRetry(operation, {
+    signal: shutdown.signal,
+    onUnavailable: (error) => log("controller.unavailable", { error: errorMessage(error) }),
+    onAvailable: (unavailableMs) => log("controller.available", { unavailable_ms: unavailableMs }),
+  });
   const [charter, agent] = await Promise.all([
     readFile(config.charterPath, "utf8"),
-    polis.self(),
+    callPolis(() => polis.self(shutdown.signal)),
   ]);
   const modelRuntime = await ModelRuntime.create({
     ...(config.authFile === undefined ? {} : { authPath: config.authFile }),
@@ -89,15 +95,15 @@ async function main(): Promise<void> {
     });
     log("runtime.waiting", { agent: agent.id });
     while (!stopping) {
-      const messages = await polis.messages(30, shutdown.signal);
+      const messages = await callPolis(() => polis.messages(30, shutdown.signal));
       if (messages.length === 0) {
         continue;
       }
       const messageIds = messages.map((message) => message.id);
-      await polis.journal("pi.turn.started", {
+      await callPolis(() => polis.journal("pi.turn.started", {
         session_id: session.sessionId,
         message_ids: messageIds,
-      }, shutdown.signal);
+      }, shutdown.signal));
       log("turn.start", {
         agent: agent.id,
         session: session.sessionId,
@@ -112,17 +118,17 @@ async function main(): Promise<void> {
       }
 
       const lastMessage = messages.at(-1)?.id;
-      if (lastMessage !== undefined) {
-        await polis.acknowledge(lastMessage, shutdown.signal);
-      }
-      await polis.journal("pi.turn.completed", {
+      await callPolis(() => polis.journal("pi.turn.completed", {
         session_id: session.sessionId,
         session_file: session.sessionFile,
         model_provider: session.model?.provider,
         model_id: session.model?.id,
         message_ids: messageIds,
-        messages_acknowledged: messages.length,
-      }, shutdown.signal);
+        messages_completed: messages.length,
+      }, shutdown.signal));
+      if (lastMessage !== undefined) {
+        await callPolis(() => polis.acknowledge(lastMessage, shutdown.signal));
+      }
       log("turn.complete", { agent: agent.id, messages_acknowledged: messages.length });
       log("runtime.waiting", { agent: agent.id });
     }
@@ -147,8 +153,11 @@ function log(event: string, fields: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify({ time: new Date().toISOString(), event, ...fields })}\n`);
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 main().catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`${JSON.stringify({ time: new Date().toISOString(), event: "runtime.error", message })}\n`);
+  process.stderr.write(`${JSON.stringify({ time: new Date().toISOString(), event: "runtime.error", message: errorMessage(error) })}\n`);
   process.exitCode = 1;
 });

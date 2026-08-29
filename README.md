@@ -99,6 +99,14 @@ incarnation receives the same unacknowledged batch. Tools may therefore have
 made partial durable changes before a retry; agents should inspect existing work
 and make consequential operations idempotent when practical.
 
+The controller's bbolt file also contains active leases, mailboxes, scheduled
+messages, and journals. A brief controller outage is retried by a running Pi
+runtime and does not itself cause an LLM turn or a new incarnation. Workers
+still enforce the local lease deadline: if the controller remains unavailable
+past it, they stop their runtimes, and a replacement incarnation resumes after
+the controller returns. Completion is journaled before mailbox acknowledgement,
+so losing the lease during recovery leaves the message available for retry.
+
 Create a Pi-backed agent by making its arbitrary runtime command the custom
 runner:
 
