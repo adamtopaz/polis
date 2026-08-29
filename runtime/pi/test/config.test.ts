@@ -20,6 +20,48 @@ test("loadConfig derives durable Pi paths", () => {
   assert.equal(config.authFile, path.resolve("./auth.json"));
 });
 
+test("runtime flags override the environment model and select thinking", () => {
+  const config = loadConfig({
+    POLIS_URL: "http://polis.test",
+    POLIS_AGENT_TOKEN: "lease-token",
+    POLIS_WORKSPACE: "/work/agent-1",
+    POLIS_CHARTER_PATH: "/work/agent-1/.polis/charter.md",
+    POLIS_PI_MODEL: "anthropic/environment-model:medium",
+  }, [
+    "--model",
+    "openai-codex/gpt-5.5",
+    "--thinking=high",
+  ]);
+
+  assert.equal(config.model, "openai-codex/gpt-5.5");
+  assert.equal(config.thinking, "high");
+});
+
+test("thinking can be selected without overriding the restored model", () => {
+  const config = loadConfig({
+    POLIS_URL: "http://polis.test",
+    POLIS_AGENT_TOKEN: "lease-token",
+    POLIS_WORKSPACE: "/work/agent-1",
+    POLIS_CHARTER_PATH: "/work/agent-1/.polis/charter.md",
+  }, ["--thinking", "low"]);
+
+  assert.equal(config.model, undefined);
+  assert.equal(config.thinking, "low");
+});
+
+test("runtime flags reject missing, invalid, and unknown values", () => {
+  const environment = {
+    POLIS_URL: "http://polis.test",
+    POLIS_AGENT_TOKEN: "lease-token",
+    POLIS_WORKSPACE: "/work/agent-1",
+    POLIS_CHARTER_PATH: "/work/agent-1/.polis/charter.md",
+  };
+
+  assert.throws(() => loadConfig(environment, ["--model"]), /--model requires a value/);
+  assert.throws(() => loadConfig(environment, ["--thinking", "enormous"]), /invalid --thinking level/);
+  assert.throws(() => loadConfig(environment, ["--provider", "openai"]), /unknown argument/);
+});
+
 test("loadConfig requires lease environment", () => {
   assert.throws(() => loadConfig({}), /POLIS_URL is required/);
 });

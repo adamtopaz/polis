@@ -8,15 +8,28 @@ export interface Config {
   agentDir: string;
   sessionDir: string;
   model?: string;
+  thinking?: ThinkingLevel;
   authFile?: string;
 }
 
-export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Config {
+export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type ThinkingLevel = typeof thinkingLevels[number];
+
+interface RuntimeArgs {
+  model?: string;
+  thinking?: ThinkingLevel;
+}
+
+export function loadConfig(
+  environment: NodeJS.ProcessEnv = process.env,
+  args: readonly string[] = [],
+): Config {
+  const runtime = parseRuntimeArgs(args);
   const polisUrl = required(environment, "POLIS_URL").replace(/\/+$/, "");
   const agentToken = required(environment, "POLIS_AGENT_TOKEN");
   const workspace = path.resolve(required(environment, "POLIS_WORKSPACE"));
   const charterPath = path.resolve(required(environment, "POLIS_CHARTER_PATH"));
-  const model = optional(environment.POLIS_PI_MODEL);
+  const model = runtime.model ?? optional(environment.POLIS_PI_MODEL);
   const authFile = optional(environment.POLIS_PI_AUTH_FILE);
 
   return {
@@ -27,8 +40,51 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Config
     agentDir: path.join(workspace, ".polis", "pi-agent"),
     sessionDir: path.join(workspace, ".polis", "pi-sessions"),
     ...(model === undefined ? {} : { model }),
+    ...(runtime.thinking === undefined ? {} : { thinking: runtime.thinking }),
     ...(authFile === undefined ? {} : { authFile: path.resolve(authFile) }),
   };
+}
+
+function parseRuntimeArgs(args: readonly string[]): RuntimeArgs {
+  let model: string | undefined;
+  let thinking: ThinkingLevel | undefined;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === "--model") {
+      model = flagValue("--model", args[index + 1]);
+      index += 1;
+    } else if (argument?.startsWith("--model=")) {
+      model = flagValue("--model", argument.slice("--model=".length));
+    } else if (argument === "--thinking") {
+      thinking = parseThinking(flagValue("--thinking", args[index + 1]));
+      index += 1;
+    } else if (argument?.startsWith("--thinking=")) {
+      thinking = parseThinking(flagValue("--thinking", argument.slice("--thinking=".length)));
+    } else {
+      throw new Error(`unknown argument ${JSON.stringify(argument)}`);
+    }
+  }
+
+  return {
+    ...(model === undefined ? {} : { model }),
+    ...(thinking === undefined ? {} : { thinking }),
+  };
+}
+
+function flagValue(flag: string, value: string | undefined): string {
+  const normalized = optional(value);
+  if (normalized === undefined || normalized.startsWith("--")) {
+    throw new Error(`${flag} requires a value`);
+  }
+  return normalized;
+}
+
+function parseThinking(value: string): ThinkingLevel {
+  if ((thinkingLevels as readonly string[]).includes(value)) {
+    return value as ThinkingLevel;
+  }
+  throw new Error(`invalid --thinking level ${JSON.stringify(value)}; expected ${thinkingLevels.join(", ")}`);
 }
 
 function required(environment: NodeJS.ProcessEnv, name: string): string {

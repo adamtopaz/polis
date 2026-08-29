@@ -86,6 +86,21 @@ API-key environment variables are inherited by the runtime. An existing Pi
 `auth.json` can instead be supplied with `POLIS_PI_AUTH_FILE`; that file must be
 writable because Pi may refresh OAuth credentials.
 
+For explicit per-agent control, pass the model and thinking level as runtime
+arguments:
+
+```console
+polis agent create \
+  --charter 'Pursue this work carefully and autonomously.' \
+  --runtime '["polis-pi-agent","--model","openai-codex/gpt-5.5","--thinking","high"]'
+```
+
+`--model` accepts Pi's `provider/model` syntax. `--thinking` accepts `off`,
+`minimal`, `low`, `medium`, `high`, `xhigh`, or `max`, subject to the selected
+model's capabilities. Runtime arguments override `POLIS_PI_MODEL`; an explicit
+`--thinking` also overrides a thinking suffix in the model setting. Supplying
+only `--thinking` preserves Pi's restored or automatically selected model.
+
 ### Recovery semantics
 
 An idle incarnation can restart without causing a turn. The replacement process

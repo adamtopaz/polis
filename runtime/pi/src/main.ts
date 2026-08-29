@@ -27,7 +27,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 
 async function main(): Promise<void> {
-  const config = loadConfig();
+  const config = loadConfig(process.env, process.argv.slice(2));
   await Promise.all([
     mkdir(config.agentDir, { recursive: true }),
     mkdir(config.sessionDir, { recursive: true }),
@@ -58,6 +58,7 @@ async function main(): Promise<void> {
   if (selected?.warning !== undefined) {
     log("model.warning", { message: selected.warning });
   }
+  const thinkingLevel = config.thinking ?? selected?.thinkingLevel;
 
   const resourceLoader = new DefaultResourceLoader({
     cwd: config.workspace,
@@ -75,7 +76,7 @@ async function main(): Promise<void> {
     resourceLoader,
     tools: ["read", "bash", "edit", "write", "grep", "find", "ls"],
     ...(selected?.model === undefined ? {} : { model: selected.model }),
-    ...(selected?.thinkingLevel === undefined ? {} : { thinkingLevel: selected.thinkingLevel }),
+    ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
   });
   abortActiveSession = () => session.abort();
 
@@ -92,6 +93,7 @@ async function main(): Promise<void> {
       agent: agent.id,
       session: session.sessionId,
       model: `${session.model?.provider ?? "unknown"}/${session.model?.id ?? "unknown"}`,
+      thinking: session.thinkingLevel,
     });
     log("runtime.waiting", { agent: agent.id });
     while (!stopping) {
