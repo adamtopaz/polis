@@ -35,6 +35,43 @@
             mainProgram = "polis";
           };
         };
+      piRuntimeFor =
+        system:
+        let
+          pkgs = pkgsFor system;
+        in
+        pkgs.buildNpmPackage {
+          pname = "polis-pi-runtime";
+          version = "0.1.0";
+          src = self + /runtime/pi;
+          nodejs = pkgs.nodejs_22;
+          npmDepsFetcherVersion = 2;
+          npmDepsHash = "sha256-t6EVHb9TX/vJfM3A6BSgKJP+8iBQHQBL+vGNK5JRawc=";
+
+          nativeBuildInputs = [ pkgs.makeWrapper ];
+          npmBuildScript = "build";
+          doCheck = true;
+          checkPhase = ''
+            runHook preCheck
+            node --test dist/test/*.test.js
+            runHook postCheck
+          '';
+
+          installPhase = ''
+            runHook preInstall
+            mkdir -p $out/lib/polis-pi-runtime $out/bin
+            cp -r dist node_modules package.json $out/lib/polis-pi-runtime/
+            makeWrapper ${pkgs.nodejs_22}/bin/node $out/bin/polis-pi-agent \
+              --add-flags "$out/lib/polis-pi-runtime/dist/src/main.js"
+            runHook postInstall
+          '';
+
+          meta = {
+            description = "Persistent Pi SDK runtime for Polis agents";
+            homepage = "https://github.com/adamtopaz/polis";
+            mainProgram = "polis-pi-agent";
+          };
+        };
     in
     {
       packages = forAllSystems (
@@ -42,9 +79,11 @@
         let
           pkgs = pkgsFor system;
           polis = polisFor system;
+          piRuntime = piRuntimeFor system;
         in
         {
           default = polis;
+          pi-runtime = piRuntime;
           container = pkgs.dockerTools.buildLayeredImage {
             name = "polis";
             tag = "dev";
@@ -80,6 +119,49 @@
               WorkingDir = "/";
             };
           };
+          pi-container = pkgs.dockerTools.buildLayeredImage {
+            name = "polis-pi";
+            tag = "dev";
+            contents = [
+              polis
+              piRuntime
+              pkgs.bashInteractive
+              pkgs.cacert
+              pkgs.coreutils
+              pkgs.findutils
+              pkgs.gitMinimal
+              pkgs.gnugrep
+              pkgs.gnused
+              pkgs.nodejs_22
+              pkgs.ripgrep
+              pkgs.tini
+            ];
+            config = {
+              Cmd = [
+                "/bin/tini"
+                "--"
+                "/bin/polis"
+                "worker"
+              ];
+              Env = [
+                "PATH=/bin"
+                "POLIS_WORKSPACE_ROOT=/workspaces"
+              ];
+              Labels = {
+                "org.opencontainers.image.description" = "Polis worker with the Pi SDK agent runtime";
+                "org.opencontainers.image.revision" =
+                  if self ? rev then
+                    self.rev
+                  else if self ? dirtyRev then
+                    self.dirtyRev
+                  else
+                    "dirty";
+                "org.opencontainers.image.source" = "https://github.com/adamtopaz/polis";
+              };
+              User = "10001:10001";
+              WorkingDir = "/workspaces";
+            };
+          };
         }
       );
 
@@ -90,6 +172,7 @@
         in
         {
           package = polisFor system;
+          pi-runtime = piRuntimeFor system;
           formatting = pkgs.runCommand "polis-formatting" { nativeBuildInputs = [ pkgs.go ]; } ''
             cd ${self}
             unformatted="$(gofmt -l .)"
@@ -133,6 +216,7 @@
               pkgs.gopls
               pkgs.gotools
               pkgs.jq
+              pkgs.nodejs_22
             ];
           };
         }

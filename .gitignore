@@ -5,3 +5,5 @@ __pycache__/
 workspaces/
 result
 result-*
+runtime/pi/dist/
+runtime/pi/node_modules/

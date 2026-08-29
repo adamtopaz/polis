@@ -63,6 +63,39 @@ the `polis self` CLI, not an AI agent.
 Real agents are independent executables or runner images and remain free to pick
 their own models, tools, memory formats, repositories, and decision loops.
 
+## Pi runtime
+
+`polis-pi-agent` is the first real runtime. It embeds the Pi SDK directly; it
+does not invoke the `pi` CLI or put another workflow engine between Pi and
+Polis. Each incarnation:
+
+1. resumes the agent's most recent Pi session from
+   `<workspace>/.polis/pi-sessions`;
+2. adds the stable identity and charter to Pi's system prompt;
+3. supplies unread mailbox messages and lets Pi work autonomously with its
+   read, bash, edit, write, grep, find, and ls tools;
+4. acknowledges those messages after a successful turn, journals completion,
+   and sleeps the agent for five minutes.
+
+The sleep interval is configurable with `POLIS_PI_IDLE_SECONDS`. A model can be
+selected with `POLIS_PI_MODEL` using Pi's `provider/model[:thinking]` syntax.
+Pi otherwise restores the session model or selects an available model. Provider
+API-key environment variables are inherited by the runtime. An existing Pi
+`auth.json` can instead be supplied with `POLIS_PI_AUTH_FILE`; that file must be
+writable because Pi may refresh OAuth credentials.
+
+Create a Pi-backed agent by making its arbitrary runtime command the custom
+runner:
+
+```console
+polis agent create \
+  --charter 'Explore this workspace and pursue useful work autonomously.' \
+  --runtime '["polis-pi-agent"]'
+```
+
+The controller image remains `polis`. Workers that execute this runtime use the
+separate `polis-pi` image so the controller stays small.
+
 ## Development
 
 This repository is a Nix flake:
@@ -70,8 +103,10 @@ This repository is a Nix flake:
 ```console
 nix develop
 go test ./...
+npm --prefix runtime/pi test
 nix flake check
 nix build .#container
+nix build .#pi-container
 ```
 
 Run a local controller and worker:

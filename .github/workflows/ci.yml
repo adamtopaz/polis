@@ -13,6 +13,7 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/adamtopaz/polis
+  PI_IMAGE: ghcr.io/adamtopaz/polis-pi
 
 jobs:
   check-and-publish:
@@ -34,11 +35,15 @@ jobs:
       - name: Check package, tests, and formatting
         run: nix flake check --print-build-logs
 
-      - name: Build container image
-        run: nix build .#container --print-build-logs
+      - name: Build container images
+        run: |
+          nix build .#container --out-link result-controller --print-build-logs
+          nix build .#pi-container --out-link result-pi --print-build-logs
 
-      - name: Load container image
-        run: docker load --input result
+      - name: Load container images
+        run: |
+          docker load --input result-controller
+          docker load --input result-pi
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
@@ -51,5 +56,9 @@ jobs:
         run: |
           docker tag polis:dev "$IMAGE:$GITHUB_SHA"
           docker tag polis:dev "$IMAGE:main"
+          docker tag polis-pi:dev "$PI_IMAGE:$GITHUB_SHA"
+          docker tag polis-pi:dev "$PI_IMAGE:main"
           docker push "$IMAGE:$GITHUB_SHA"
           docker push "$IMAGE:main"
+          docker push "$PI_IMAGE:$GITHUB_SHA"
+          docker push "$PI_IMAGE:main"

@@ -1,0 +1,24 @@
+{
+  "name": "@polis/pi-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "polis-pi-agent": "dist/src/main.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test dist/test/*.test.js"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.4"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}
