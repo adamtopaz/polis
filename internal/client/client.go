@@ -111,10 +111,18 @@ func (c *Client) Self(ctx context.Context, token string) (model.Agent, error) {
 }
 
 func (c *Client) Messages(ctx context.Context, token string) ([]model.Message, error) {
+	return c.WaitMessages(ctx, token, 0)
+}
+
+func (c *Client) WaitMessages(ctx context.Context, token string, wait time.Duration) ([]model.Message, error) {
 	var response struct {
 		Items []model.Message `json:"items"`
 	}
-	err := c.do(ctx, http.MethodGet, "/v1/self/messages", token, nil, &response)
+	path := "/v1/self/messages"
+	if wait > 0 {
+		path += "?wait_seconds=" + fmt.Sprint(int64(wait/time.Second))
+	}
+	err := c.do(ctx, http.MethodGet, path, token, nil, &response)
 	return response.Items, err
 }
 
@@ -140,16 +148,12 @@ func (c *Client) Journal(ctx context.Context, token, kind string, data json.RawM
 	return event, err
 }
 
-func (c *Client) Sleep(ctx context.Context, token string, duration time.Duration) (model.Agent, error) {
-	var agent model.Agent
-	err := c.do(ctx, http.MethodPost, "/v1/self/sleep", token, map[string]any{"for_seconds": int64(duration.Seconds())}, &agent)
-	return agent, err
-}
-
-func (c *Client) TerminateSelf(ctx context.Context, token string) (model.Agent, error) {
-	var agent model.Agent
-	err := c.do(ctx, http.MethodPost, "/v1/self/terminate", token, map[string]any{}, &agent)
-	return agent, err
+func (c *Client) ScheduleMessage(ctx context.Context, token string, delay time.Duration, body json.RawMessage) (model.ScheduledMessage, error) {
+	var message model.ScheduledMessage
+	err := c.do(ctx, http.MethodPost, "/v1/self/schedule", token, map[string]any{
+		"after_seconds": int64(delay / time.Second), "body": body,
+	}, &message)
+	return message, err
 }
 
 func (c *Client) do(ctx context.Context, method, path, token string, input, output any) error {

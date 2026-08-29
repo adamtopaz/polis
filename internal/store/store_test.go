@@ -33,30 +33,11 @@ func TestAgentLifecycle(t *testing.T) {
 		t.Fatalf("heartbeat = %#v, %v", heartbeat, err)
 	}
 
-	sleepUntil := now.Add(time.Hour)
-	agent, err = st.Sleep(lease.Token, sleepUntil)
-	if err != nil {
-		t.Fatal(err)
+	scheduled, err := st.ScheduleMessage(lease.Token, now.Add(20*time.Second), json.RawMessage(`{"reason":"resume later"}`))
+	if err != nil || scheduled.DeliverAt != now.Add(20*time.Second) {
+		t.Fatalf("scheduled message = %#v, %v", scheduled, err)
 	}
-	assertPhase(t, agent, "sleeping")
-	if _, err := st.Self(lease.Token); !errors.Is(err, ErrInvalidLease) {
-		t.Fatalf("old incarnation remains authorized: %v", err)
-	}
-	if _, err := st.Acquire("worker-2", 30*time.Second); !errors.Is(err, ErrNoAgent) {
-		t.Fatalf("sleeping agent was acquired: %v", err)
-	}
-
-	if _, err := st.SendMessage("alpha", "operator", json.RawMessage(`{"wake":true}`)); err != nil {
-		t.Fatal(err)
-	}
-	agent, err = st.GetAgent("alpha")
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertPhase(t, agent, "ready")
-
-	lease, err = st.Acquire("worker-2", 30*time.Second)
-	if err != nil {
+	if _, err := st.SendMessage("alpha", "operator", json.RawMessage(`{"work":"now"}`)); err != nil {
 		t.Fatal(err)
 	}
 	messages, err := st.Messages(lease.Token, 100)
@@ -73,6 +54,14 @@ func TestAgentLifecycle(t *testing.T) {
 	if err != nil || len(messages) != 0 {
 		t.Fatalf("acked messages = %#v, %v", messages, err)
 	}
+	now = now.Add(20 * time.Second)
+	messages, err = st.Messages(lease.Token, 100)
+	if err != nil || len(messages) != 1 || messages[0].Sender != "agent:alpha" {
+		t.Fatalf("scheduled messages = %#v, %v", messages, err)
+	}
+	if err := st.AckMessages(lease.Token, messages[0].ID); err != nil {
+		t.Fatal(err)
+	}
 
 	agent, err = st.SetState("alpha", model.StatePaused, "operator")
 	if err != nil {
@@ -88,11 +77,7 @@ func TestAgentLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertPhase(t, agent, "ready")
-	lease, err = st.Acquire("worker-3", 30*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	agent, err = st.TerminateSelf(lease.Token)
+	agent, err = st.SetState("alpha", model.StateTerminated, "operator")
 	if err != nil {
 		t.Fatal(err)
 	}

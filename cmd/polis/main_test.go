@@ -70,6 +70,7 @@ func TestSelfCommands(t *testing.T) {
 		{"journal", "cli.tested", `{"ok":true}`},
 		{"spawn", "--id", "z-child", "--charter", "Explore.", "--runtime", `["runtime"]`},
 		{"send", "y-target", `{"hello":"target"}`},
+		{"schedule", "1h", `{"reason":"continue"}`},
 	}
 	for _, command := range commands {
 		if err := runSelfCommand(ctx, command); err != nil {
@@ -89,23 +90,12 @@ func TestSelfCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := runSelfCommand(ctx, []string{"sleep", "1h"}); err != nil {
-		t.Fatal(err)
-	}
 	parent, err := database.GetAgent("parent")
-	if err != nil || parent.Phase != "sleeping" {
-		t.Fatalf("sleeping parent = %#v, %v", parent, err)
+	if err != nil || parent.Phase != "running" {
+		t.Fatalf("running parent = %#v, %v", parent, err)
 	}
 
-	childLease, err := database.Acquire("child-worker", 30*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("POLIS_AGENT_TOKEN", childLease.Token)
-	if err := runSelfCommand(ctx, []string{"terminate"}); err != nil {
-		t.Fatal(err)
-	}
-	child, err := database.GetAgent("z-child")
+	child, err := database.SetState("z-child", model.StateTerminated, "operator")
 	if err != nil || child.State != model.StateTerminated {
 		t.Fatalf("terminated child = %#v, %v", child, err)
 	}

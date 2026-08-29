@@ -48,8 +48,9 @@ export class PolisClient {
     return this.request<Agent>("GET", "/v1/self", undefined, signal);
   }
 
-  async messages(signal?: AbortSignal): Promise<Message[]> {
-    const response = await this.request<MessagesResponse>("GET", "/v1/self/messages", undefined, signal);
+  async messages(waitSeconds = 0, signal?: AbortSignal): Promise<Message[]> {
+    const query = waitSeconds === 0 ? "" : `?wait_seconds=${waitSeconds}`;
+    const response = await this.request<MessagesResponse>("GET", `/v1/self/messages${query}`, undefined, signal);
     return response.items;
   }
 
@@ -59,10 +60,6 @@ export class PolisClient {
 
   journal(kind: string, data: unknown, signal?: AbortSignal): Promise<Event> {
     return this.request<Event>("POST", "/v1/self/journal", { kind, data }, signal);
-  }
-
-  sleep(seconds: number, signal?: AbortSignal): Promise<Agent> {
-    return this.request<Agent>("POST", "/v1/self/sleep", { for_seconds: seconds }, signal);
   }
 
   private async request<T = void>(

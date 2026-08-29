@@ -39,11 +39,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/worker/heartbeat", s.heartbeat)
 	mux.HandleFunc("POST /v1/worker/exited", s.exited)
 	mux.HandleFunc("GET /v1/self", s.self)
-	mux.HandleFunc("POST /v1/self/sleep", s.sleep)
-	mux.HandleFunc("POST /v1/self/terminate", s.terminateSelf)
 	mux.HandleFunc("GET /v1/self/messages", s.selfMessages)
 	mux.HandleFunc("POST /v1/self/messages", s.sendSelfMessage)
 	mux.HandleFunc("POST /v1/self/messages/ack", s.ackMessages)
+	mux.HandleFunc("POST /v1/self/schedule", s.scheduleSelfMessage)
 	mux.HandleFunc("POST /v1/self/spawn", s.spawn)
 	mux.HandleFunc("POST /v1/self/journal", s.journal)
 	return s.recoverAndLog(mux)
@@ -195,36 +194,35 @@ func (s *Server) self(w http.ResponseWriter, r *http.Request) {
 	respond(w, http.StatusOK, agent, err)
 }
 
-func (s *Server) sleep(w http.ResponseWriter, r *http.Request) {
-	var request struct {
-		Until      *time.Time `json:"until"`
-		ForSeconds int64      `json:"for_seconds"`
-	}
-	if !decode(w, r, &request) {
-		return
-	}
-	var until time.Time
-	switch {
-	case request.Until != nil:
-		until = request.Until.UTC()
-	case request.ForSeconds > 0:
-		until = time.Now().UTC().Add(time.Duration(request.ForSeconds) * time.Second)
-	default:
-		writeError(w, errors.New("until or a positive for_seconds is required"))
-		return
-	}
-	agent, err := s.store.Sleep(bearer(r), until)
-	respond(w, http.StatusOK, agent, err)
-}
-
-func (s *Server) terminateSelf(w http.ResponseWriter, r *http.Request) {
-	agent, err := s.store.TerminateSelf(bearer(r))
-	respond(w, http.StatusOK, agent, err)
-}
-
 func (s *Server) selfMessages(w http.ResponseWriter, r *http.Request) {
-	items, err := s.store.Messages(bearer(r), queryLimit(r))
-	respond(w, http.StatusOK, map[string]any{"items": items}, err)
+	waitSeconds, err := queryWaitSeconds(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	deadline := time.Now().Add(time.Duration(waitSeconds) * time.Second)
+	for {
+		items, err := s.store.Messages(bearer(r), queryLimit(r))
+		if err != nil || len(items) > 0 || waitSeconds == 0 {
+			respond(w, http.StatusOK, map[string]any{"items": items}, err)
+			return
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			respond(w, http.StatusOK, map[string]any{"items": items}, nil)
+			return
+		}
+		if remaining > time.Second {
+			remaining = time.Second
+		}
+		timer := time.NewTimer(remaining)
+		select {
+		case <-r.Context().Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
 }
 
 func (s *Server) sendSelfMessage(w http.ResponseWriter, r *http.Request) {
@@ -248,6 +246,24 @@ func (s *Server) ackMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	err := s.store.AckMessages(bearer(r), request.Through)
 	respond(w, http.StatusOK, map[string]bool{"ok": true}, err)
+}
+
+func (s *Server) scheduleSelfMessage(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		AfterSeconds int64           `json:"after_seconds"`
+		Body         json.RawMessage `json:"body"`
+	}
+	if !decode(w, r, &request) {
+		return
+	}
+	const maxScheduleSeconds = int64(100 * 365 * 24 * 60 * 60)
+	if request.AfterSeconds < 1 || request.AfterSeconds > maxScheduleSeconds {
+		writeError(w, errors.New("after_seconds must be between 1 and 3153600000"))
+		return
+	}
+	deliverAt := time.Now().UTC().Add(time.Duration(request.AfterSeconds) * time.Second)
+	message, err := s.store.ScheduleMessage(bearer(r), deliverAt, request.Body)
+	respond(w, http.StatusCreated, message, err)
 }
 
 func (s *Server) spawn(w http.ResponseWriter, r *http.Request) {
@@ -347,4 +363,16 @@ func bearer(r *http.Request) string {
 func queryLimit(r *http.Request) int {
 	value, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	return value
+}
+
+func queryWaitSeconds(r *http.Request) (int, error) {
+	value := r.URL.Query().Get("wait_seconds")
+	if value == "" {
+		return 0, nil
+	}
+	seconds, err := strconv.Atoi(value)
+	if err != nil || seconds < 0 || seconds > 30 {
+		return 0, errors.New("wait_seconds must be between 0 and 30")
+	}
+	return seconds, nil
 }

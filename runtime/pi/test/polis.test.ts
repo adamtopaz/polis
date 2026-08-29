@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { PolisApiError, PolisClient } from "../src/polis.js";
 
-test("PolisClient sends bearer authentication and lifecycle requests", async () => {
+test("PolisClient sends bearer authentication and persistent runtime requests", async () => {
   const requests: Array<{ url: string; init?: RequestInit }> = [];
   const fetcher: typeof fetch = async (input, init) => {
     requests.push({ url: String(input), ...(init === undefined ? {} : { init }) });
@@ -12,14 +12,14 @@ test("PolisClient sends bearer authentication and lifecycle requests", async () 
 
   await polis.acknowledge(42);
   await polis.journal("work.completed", { result: "ok" });
-  await polis.sleep(300);
+  await polis.messages(30);
 
   assert.equal(requests.length, 3);
   assert.equal(new Headers(requests[0]?.init?.headers).get("Authorization"), "Bearer lease-token");
   assert.equal(requests[0]?.url, "http://polis.test/v1/self/messages/ack");
   assert.equal(requests[0]?.init?.body, JSON.stringify({ through: 42 }));
   assert.equal(requests[1]?.init?.body, JSON.stringify({ kind: "work.completed", data: { result: "ok" } }));
-  assert.equal(requests[2]?.init?.body, JSON.stringify({ for_seconds: 300 }));
+  assert.equal(requests[2]?.url, "http://polis.test/v1/self/messages?wait_seconds=30");
 });
 
 test("PolisClient handles empty success responses", async () => {

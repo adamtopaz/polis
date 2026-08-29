@@ -12,9 +12,9 @@ An agent is only:
 - a durable mailbox and journal;
 - an `active`, `paused`, or `terminated` desired state.
 
-`ready`, `running`, and `sleeping` are derived from the desired state, wake time,
-and incarnation lease. There are no tasks, workflows, project records, planners,
-or model abstractions in Polis.
+`ready`, `running`, and crash `backoff` are derived from the desired state and
+incarnation lease. There are no tasks, workflows, project records, planners, or
+model abstractions in Polis.
 
 ## How it runs
 
@@ -37,29 +37,28 @@ polis self inspect
 polis self messages
 polis self ack 42
 polis self send another-agent '{"hello":"there"}'
+polis self schedule 30m '{"reason":"continue"}'
 polis self spawn --charter 'Investigate independently.' --runtime '["agent-runtime"]'
 polis self journal decision.made '{"decision":"continue"}'
-polis self sleep 30m
-polis self terminate
 ```
 
 These commands read `POLIS_URL` and `POLIS_AGENT_TOKEN` automatically and emit
-JSON. `sleep` and `terminate` revoke the current incarnation, so an agent should
-use them as its final operation before exiting.
+JSON. Agents cannot pause or terminate themselves; the operator owns desired
+state. Scheduling creates a durable future mailbox message.
 
 The lease token is both the incarnation fence and the agent's capability for the
 self API. A worker renews it while the process runs. If renewal is lost, the
 worker terminates the process before the lease deadline. A crash leads to a new
-incarnation using the same identity and workspace. An agent can sleep, wake from
-a message, message or spawn another agent, append to its journal, or terminate
-itself.
+incarnation using the same identity and workspace after a short backoff. An
+agent can wait for messages, schedule a future message to itself, message or
+spawn another agent, and append to its journal.
 
 Operator routes use a separate bearer token. The controller and control CLI read
 it from `POLIS_OPERATOR_TOKEN_FILE`, or from `POLIS_OPERATOR_TOKEN` for local
 development. Workers and agent runtimes must never receive this token.
 
-The included `demo-agent` is a deterministic smoke-test runtime that exercises
-the `polis self` CLI, not an AI agent.
+The included `demo-agent` is a deterministic persistent smoke-test runtime, not
+an AI agent.
 Real agents are independent executables or runner images and remain free to pick
 their own models, tools, memory formats, repositories, and decision loops.
 
@@ -67,19 +66,22 @@ their own models, tools, memory formats, repositories, and decision loops.
 
 `polis-pi-agent` is the first real runtime. It embeds the Pi SDK directly; it
 does not invoke the `pi` CLI or put another workflow engine between Pi and
-Polis. Each incarnation:
+Polis. A runtime process and one Pi `AgentSession` stay alive for the whole
+incarnation:
 
 1. resumes the agent's most recent Pi session from
    `<workspace>/.polis/pi-sessions`;
 2. adds the stable identity and charter to Pi's system prompt;
-3. supplies unread mailbox messages and lets Pi work autonomously with its
-   read, bash, edit, write, grep, find, and ls tools;
-4. acknowledges those messages after a successful turn, journals completion,
-   and sleeps the agent for five minutes.
+3. long-polls the durable mailbox without making any LLM call;
+4. on a message, supplies the queued batch to Pi and lets it take one complete
+   autonomous turn with its read, bash, edit, write, grep, find, and ls tools;
+5. acknowledges the batch after success, journals completion, and waits again
+   in the same session.
 
-The sleep interval is configurable with `POLIS_PI_IDLE_SECONDS`. A model can be
-selected with `POLIS_PI_MODEL` using Pi's `provider/model[:thinking]` syntax.
-Pi otherwise restores the session model or selects an available model. Provider
+Messages received during a turn remain queued for the next turn. The agent can
+schedule its own future trigger with `polis self schedule`. A model can be
+selected with `POLIS_PI_MODEL` using Pi's `provider/model[:thinking]` syntax. Pi
+otherwise restores the session model or selects an available model. Provider
 API-key environment variables are inherited by the runtime. An existing Pi
 `auth.json` can instead be supplied with `POLIS_PI_AUTH_FILE`; that file must be
 writable because Pi may refresh OAuth credentials.
@@ -133,7 +135,7 @@ policy system.
 ## Deliberate limits
 
 The initial controller is a single bbolt writer, so it is not highly available.
-That keeps the consistency model obvious while we learn. It can coordinate many
-dormant agents, while active capacity scales by adding workers or worker slots.
-Moving state to a replicated database should happen only when measurements make
-that necessary.
+That keeps the consistency model obvious while we learn. Every active persistent
+agent occupies one worker slot, so active capacity scales by adding workers or
+slots. Paused agents consume no slot. Moving state to a replicated database
+should happen only when measurements make that necessary.

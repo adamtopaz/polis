@@ -38,6 +38,15 @@ type Message struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 
+type ScheduledMessage struct {
+	ID        uint64          `json:"id"`
+	AgentID   string          `json:"agent_id"`
+	Sender    string          `json:"sender"`
+	Body      json.RawMessage `json:"body"`
+	DeliverAt time.Time       `json:"deliver_at"`
+	CreatedAt time.Time       `json:"created_at"`
+}
+
 type Event struct {
 	ID        uint64          `json:"id"`
 	AgentID   string          `json:"agent_id,omitempty"`

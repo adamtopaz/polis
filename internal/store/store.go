@@ -16,18 +16,20 @@ import (
 )
 
 var (
-	ErrNotFound     = errors.New("not found")
-	ErrNoAgent      = errors.New("no agent ready")
-	ErrInvalidLease = errors.New("invalid or expired lease")
-	idPattern       = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+	ErrNotFound            = errors.New("not found")
+	ErrNoAgent             = errors.New("no agent ready")
+	ErrInvalidLease        = errors.New("invalid or expired lease")
+	errScheduledMessageDue = errors.New("scheduled message due")
+	idPattern              = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 )
 
 var (
-	bucketMeta     = []byte("meta")
-	bucketAgents   = []byte("agents")
-	bucketLeases   = []byte("leases")
-	bucketMessages = []byte("messages")
-	bucketEvents   = []byte("events")
+	bucketMeta      = []byte("meta")
+	bucketAgents    = []byte("agents")
+	bucketLeases    = []byte("leases")
+	bucketMessages  = []byte("messages")
+	bucketScheduled = []byte("scheduled_messages")
+	bucketEvents    = []byte("events")
 )
 
 type agentRecord struct {
@@ -56,12 +58,12 @@ func Open(path string) (*Store, error) {
 	}
 	s := &Store{db: db, now: func() time.Time { return time.Now().UTC() }}
 	if err := db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{bucketMeta, bucketAgents, bucketLeases, bucketMessages, bucketEvents} {
+		for _, name := range [][]byte{bucketMeta, bucketAgents, bucketLeases, bucketMessages, bucketScheduled, bucketEvents} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
 		}
-		return tx.Bucket(bucketMeta).Put([]byte("schema"), []byte("1"))
+		return tx.Bucket(bucketMeta).Put([]byte("schema"), []byte("2"))
 	}); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("initialize database: %w", err)
@@ -267,50 +269,6 @@ func (s *Store) Self(token string) (model.Agent, error) {
 	return publicAgent(record, now), err
 }
 
-func (s *Store) Sleep(token string, until time.Time) (model.Agent, error) {
-	now := s.now()
-	if !until.After(now) {
-		return model.Agent{}, errors.New("wake time must be in the future")
-	}
-	until = until.UTC()
-	var record agentRecord
-	err := s.db.Update(func(tx *bolt.Tx) error {
-		var err error
-		record, err = recordForToken(tx, token, now)
-		if err != nil {
-			return err
-		}
-		clearLease(tx, &record)
-		record.WakeAt = &until
-		record.UpdatedAt = now
-		if err := putRecord(tx.Bucket(bucketAgents), record.ID, record); err != nil {
-			return err
-		}
-		return appendEvent(tx, model.Event{AgentID: record.ID, Actor: "agent:" + record.ID, Kind: "agent.sleeping", Data: mustJSON(map[string]any{"until": until}), CreatedAt: now})
-	})
-	return publicAgent(record, now), err
-}
-
-func (s *Store) TerminateSelf(token string) (model.Agent, error) {
-	now := s.now()
-	var record agentRecord
-	err := s.db.Update(func(tx *bolt.Tx) error {
-		var err error
-		record, err = recordForToken(tx, token, now)
-		if err != nil {
-			return err
-		}
-		clearLease(tx, &record)
-		record.State = model.StateTerminated
-		record.UpdatedAt = now
-		if err := putRecord(tx.Bucket(bucketAgents), record.ID, record); err != nil {
-			return err
-		}
-		return appendEvent(tx, model.Event{AgentID: record.ID, Actor: "agent:" + record.ID, Kind: "agent.terminated", CreatedAt: now})
-	})
-	return publicAgent(record, now), err
-}
-
 func (s *Store) SendMessage(agentID, sender string, body json.RawMessage) (model.Message, error) {
 	if !json.Valid(body) {
 		return model.Message{}, errors.New("message body must be valid JSON")
@@ -325,21 +283,9 @@ func (s *Store) SendMessage(agentID, sender string, body json.RawMessage) (model
 		if record.State == model.StateTerminated {
 			return errors.New("cannot message a terminated agent")
 		}
-		root := tx.Bucket(bucketMessages)
-		mailbox, err := root.CreateBucketIfNotExists([]byte(agentID))
+		var err error
+		message, err = appendMessage(tx, agentID, sender, body, now)
 		if err != nil {
-			return err
-		}
-		id, err := mailbox.NextSequence()
-		if err != nil {
-			return err
-		}
-		message = model.Message{ID: id, AgentID: agentID, Sender: sender, Body: append(json.RawMessage(nil), body...), CreatedAt: now}
-		encoded, err := json.Marshal(message)
-		if err != nil {
-			return err
-		}
-		if err := mailbox.Put(sequenceKey(id), encoded); err != nil {
 			return err
 		}
 		if record.State == model.StateActive && record.WakeAt != nil {
@@ -349,9 +295,51 @@ func (s *Store) SendMessage(agentID, sender string, body json.RawMessage) (model
 				return err
 			}
 		}
-		return appendEvent(tx, model.Event{AgentID: agentID, Actor: sender, Kind: "message.sent", Data: mustJSON(map[string]any{"message_id": id}), CreatedAt: now})
+		return appendEvent(tx, model.Event{AgentID: agentID, Actor: sender, Kind: "message.sent", Data: mustJSON(map[string]any{"message_id": message.ID}), CreatedAt: now})
 	})
 	return message, err
+}
+
+func (s *Store) ScheduleMessage(token string, deliverAt time.Time, body json.RawMessage) (model.ScheduledMessage, error) {
+	if !json.Valid(body) {
+		return model.ScheduledMessage{}, errors.New("message body must be valid JSON")
+	}
+	now := s.now()
+	deliverAt = deliverAt.UTC()
+	if !deliverAt.After(now) {
+		return model.ScheduledMessage{}, errors.New("delivery time must be in the future")
+	}
+	var scheduled model.ScheduledMessage
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		record, err := recordForToken(tx, token, now)
+		if err != nil {
+			return err
+		}
+		queue, err := tx.Bucket(bucketScheduled).CreateBucketIfNotExists([]byte(record.ID))
+		if err != nil {
+			return err
+		}
+		id, err := queue.NextSequence()
+		if err != nil {
+			return err
+		}
+		scheduled = model.ScheduledMessage{
+			ID: id, AgentID: record.ID, Sender: "agent:" + record.ID,
+			Body: append(json.RawMessage(nil), body...), DeliverAt: deliverAt, CreatedAt: now,
+		}
+		encoded, err := json.Marshal(scheduled)
+		if err != nil {
+			return err
+		}
+		if err := queue.Put(sequenceKey(id), encoded); err != nil {
+			return err
+		}
+		return appendEvent(tx, model.Event{
+			AgentID: record.ID, Actor: scheduled.Sender, Kind: "message.scheduled",
+			Data: mustJSON(map[string]any{"schedule_id": id, "deliver_at": deliverAt}), CreatedAt: now,
+		})
+	})
+	return scheduled, err
 }
 
 func (s *Store) SendMessageAs(token, agentID string, body json.RawMessage) (model.Message, error) {
@@ -367,8 +355,31 @@ func (s *Store) Messages(token string, limit int) ([]model.Message, error) {
 		limit = 100
 	}
 	now := s.now()
-	items := make([]model.Message, 0)
+	due := false
 	err := s.db.View(func(tx *bolt.Tx) error {
+		record, err := recordForToken(tx, token, now)
+		if err != nil {
+			return err
+		}
+		due, err = hasDueMessages(tx, record.ID, now)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	if due {
+		if err := s.db.Update(func(tx *bolt.Tx) error {
+			record, err := recordForToken(tx, token, now)
+			if err != nil {
+				return err
+			}
+			return promoteDueMessages(tx, record.ID, now)
+		}); err != nil {
+			return nil, err
+		}
+	}
+	items := make([]model.Message, 0)
+	err = s.db.View(func(tx *bolt.Tx) error {
 		record, err := recordForToken(tx, token, now)
 		if err != nil {
 			return err
@@ -388,6 +399,27 @@ func (s *Store) Messages(token string, limit int) ([]model.Message, error) {
 		return nil
 	})
 	return items, err
+}
+
+func hasDueMessages(tx *bolt.Tx, agentID string, now time.Time) (bool, error) {
+	queue := tx.Bucket(bucketScheduled).Bucket([]byte(agentID))
+	if queue == nil {
+		return false, nil
+	}
+	err := queue.ForEach(func(_, value []byte) error {
+		var scheduled model.ScheduledMessage
+		if err := json.Unmarshal(value, &scheduled); err != nil {
+			return err
+		}
+		if !scheduled.DeliverAt.After(now) {
+			return errScheduledMessageDue
+		}
+		return nil
+	})
+	if errors.Is(err, errScheduledMessageDue) {
+		return true, nil
+	}
+	return false, err
 }
 
 func (s *Store) AckMessages(token string, through uint64) error {
@@ -479,7 +511,7 @@ func publicAgent(record agentRecord, now time.Time) model.Agent {
 			leaseOwner = record.LeaseOwner
 			leaseExpiresAt = record.LeaseExpiresAt
 		case record.WakeAt != nil && record.WakeAt.After(now):
-			phase = "sleeping"
+			phase = "backoff"
 		default:
 			phase = "ready"
 		}
@@ -489,6 +521,57 @@ func publicAgent(record agentRecord, now time.Time) model.Agent {
 		Phase: phase, WakeAt: record.WakeAt, LeaseOwner: leaseOwner, LeaseExpiresAt: leaseExpiresAt,
 		CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt,
 	}
+}
+
+func appendMessage(tx *bolt.Tx, agentID, sender string, body json.RawMessage, now time.Time) (model.Message, error) {
+	mailbox, err := tx.Bucket(bucketMessages).CreateBucketIfNotExists([]byte(agentID))
+	if err != nil {
+		return model.Message{}, err
+	}
+	id, err := mailbox.NextSequence()
+	if err != nil {
+		return model.Message{}, err
+	}
+	message := model.Message{ID: id, AgentID: agentID, Sender: sender, Body: append(json.RawMessage(nil), body...), CreatedAt: now}
+	encoded, err := json.Marshal(message)
+	if err != nil {
+		return model.Message{}, err
+	}
+	if err := mailbox.Put(sequenceKey(id), encoded); err != nil {
+		return model.Message{}, err
+	}
+	return message, nil
+}
+
+func promoteDueMessages(tx *bolt.Tx, agentID string, now time.Time) error {
+	queue := tx.Bucket(bucketScheduled).Bucket([]byte(agentID))
+	if queue == nil {
+		return nil
+	}
+	cursor := queue.Cursor()
+	for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
+		var scheduled model.ScheduledMessage
+		if err := json.Unmarshal(value, &scheduled); err != nil {
+			return err
+		}
+		if scheduled.DeliverAt.After(now) {
+			continue
+		}
+		message, err := appendMessage(tx, agentID, scheduled.Sender, scheduled.Body, now)
+		if err != nil {
+			return err
+		}
+		if err := appendEvent(tx, model.Event{
+			AgentID: agentID, Actor: scheduled.Sender, Kind: "message.delivered",
+			Data: mustJSON(map[string]any{"message_id": message.ID, "schedule_id": scheduled.ID}), CreatedAt: now,
+		}); err != nil {
+			return err
+		}
+		if err := cursor.Delete(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func recordForToken(tx *bolt.Tx, token string, now time.Time) (agentRecord, error) {

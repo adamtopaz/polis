@@ -15,10 +15,12 @@ import { polisSystemPrompt, polisTurnPrompt } from "./prompt.js";
 
 let stopping = false;
 let abortActiveSession: (() => Promise<void>) | undefined;
+const shutdown = new AbortController();
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
     stopping = true;
+    shutdown.abort();
     void abortActiveSession?.();
   });
 }
@@ -35,8 +37,6 @@ async function main(): Promise<void> {
     readFile(config.charterPath, "utf8"),
     polis.self(),
   ]);
-  const messages = await polis.messages();
-
   const modelRuntime = await ModelRuntime.create({
     ...(config.authFile === undefined ? {} : { authPath: config.authFile }),
     modelsPath: path.join(config.agentDir, "models.json"),
@@ -82,36 +82,51 @@ async function main(): Promise<void> {
   });
 
   try {
-    log("turn.start", {
+    log("runtime.ready", {
       agent: agent.id,
       session: session.sessionId,
       model: `${session.model?.provider ?? "unknown"}/${session.model?.id ?? "unknown"}`,
-      unread_messages: messages.length,
     });
-    await session.prompt(polisTurnPrompt(messages));
+    log("runtime.waiting", { agent: agent.id });
+    while (!stopping) {
+      const messages = await polis.messages(30, shutdown.signal);
+      if (messages.length === 0) {
+        continue;
+      }
+      log("turn.start", {
+        agent: agent.id,
+        session: session.sessionId,
+        unread_messages: messages.length,
+      });
+      await session.prompt(polisTurnPrompt(messages));
+      if (stopping) {
+        return;
+      }
+      if (session.agent.state.errorMessage !== undefined) {
+        throw new Error(session.agent.state.errorMessage);
+      }
+
+      const lastMessage = messages.at(-1)?.id;
+      if (lastMessage !== undefined) {
+        await polis.acknowledge(lastMessage, shutdown.signal);
+      }
+      await polis.journal("pi.turn.completed", {
+        session_id: session.sessionId,
+        session_file: session.sessionFile,
+        model_provider: session.model?.provider,
+        model_id: session.model?.id,
+        messages_acknowledged: messages.length,
+      }, shutdown.signal);
+      log("turn.complete", { agent: agent.id, messages_acknowledged: messages.length });
+      log("runtime.waiting", { agent: agent.id });
+    }
+  } catch (error) {
     if (stopping) {
+      log("runtime.stopped", { agent: agent.id });
       return;
     }
-    if (session.agent.state.errorMessage !== undefined) {
-      throw new Error(session.agent.state.errorMessage);
-    }
-
-    const lastMessage = messages.at(-1)?.id;
-    if (lastMessage !== undefined) {
-      await polis.acknowledge(lastMessage);
-    }
-    await polis.journal("pi.turn.completed", {
-      session_id: session.sessionId,
-      session_file: session.sessionFile,
-      model_provider: session.model?.provider,
-      model_id: session.model?.id,
-      messages_acknowledged: messages.length,
-    });
-    await polis.sleep(config.idleSeconds);
-    log("turn.complete", { agent: agent.id, sleep_seconds: config.idleSeconds });
-  } catch (error) {
     if (error instanceof PolisApiError && error.status === 401) {
-      log("turn.yielded", { agent: agent.id });
+      log("runtime.revoked", { agent: agent.id });
       return;
     }
     throw error;

@@ -62,7 +62,7 @@ func run(ctx context.Context, args []string) error {
 
 func runSelfCommand(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("self requires inspect, messages, ack, send, spawn, journal, sleep, or terminate")
+		return errors.New("self requires inspect, messages, ack, send, schedule, spawn, or journal")
 	}
 	if args[0] == "spawn" {
 		return runSelfSpawn(ctx, args[1:])
@@ -103,6 +103,23 @@ func runSelfCommand(ctx context.Context, args []string) error {
 		}
 		message, err := api.SendMessage(ctx, token, positional[0], body)
 		return printJSON(message, err)
+	case "schedule":
+		if len(positional) != 2 {
+			return errors.New("self schedule requires a delay and a JSON body")
+		}
+		delay, err := time.ParseDuration(positional[0])
+		if err != nil {
+			return fmt.Errorf("parse schedule delay: %w", err)
+		}
+		if delay < time.Second {
+			return errors.New("schedule delay must be at least 1s")
+		}
+		body, err := rawJSON(positional[1])
+		if err != nil {
+			return err
+		}
+		message, err := api.ScheduleMessage(ctx, token, delay, body)
+		return printJSON(message, err)
 	case "journal":
 		if len(positional) != 2 {
 			return errors.New("self journal requires an event kind and JSON data")
@@ -113,27 +130,8 @@ func runSelfCommand(ctx context.Context, args []string) error {
 		}
 		event, err := api.Journal(ctx, token, positional[0], data)
 		return printJSON(event, err)
-	case "sleep":
-		if len(positional) != 1 {
-			return errors.New("self sleep requires a duration such as 30m or 2h")
-		}
-		duration, err := time.ParseDuration(positional[0])
-		if err != nil {
-			return fmt.Errorf("parse sleep duration: %w", err)
-		}
-		if duration < time.Second {
-			return errors.New("sleep duration must be at least 1s")
-		}
-		agent, err := api.Sleep(ctx, token, duration)
-		return printJSON(agent, err)
-	case "terminate":
-		if len(positional) != 0 {
-			return errors.New("self terminate takes no positional arguments")
-		}
-		agent, err := api.TerminateSelf(ctx, token)
-		return printJSON(agent, err)
 	default:
-		return errors.New("self requires inspect, messages, ack, send, spawn, journal, sleep, or terminate")
+		return errors.New("self requires inspect, messages, ack, send, schedule, spawn, or journal")
 	}
 }
 
@@ -408,10 +406,9 @@ Usage:
   polis self messages
   polis self ack MESSAGE_ID
   polis self send AGENT_ID JSON
+  polis self schedule DELAY JSON
   polis self spawn --charter TEXT --runtime '["command","arg"]' [--id ID]
   polis self journal KIND JSON
-  polis self sleep DURATION
-  polis self terminate
 `
 }
 
