@@ -114,6 +114,52 @@
           worker = programFor system "polis-worker" "Polis worker";
           demoAgent = programFor system "polis-demo-agent" "Deterministic Polis test agent";
           piRuntime = piRuntimeFor system;
+          workerContainer =
+            {
+              name,
+              description,
+              runtimeContents,
+              extraEnv ? [ ],
+            }:
+            pkgs.dockerTools.buildLayeredImage {
+              inherit name;
+              tag = "dev";
+              contents = [
+                polis
+                worker
+                pkgs.bashInteractive
+                pkgs.cacert
+                pkgs.coreutils
+                pkgs.tini
+              ]
+              ++ runtimeContents;
+              config = {
+                Cmd = [
+                  "/bin/tini"
+                  "--"
+                  "/bin/polis-worker"
+                ];
+                Env = [
+                  "PATH=/bin"
+                  "POLIS_WORKSPACE_ROOT=/workspaces"
+                  "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+                ]
+                ++ extraEnv;
+                Labels = {
+                  "org.opencontainers.image.description" = description;
+                  "org.opencontainers.image.revision" =
+                    if self ? rev then
+                      self.rev
+                    else if self ? dirtyRev then
+                      self.dirtyRev
+                    else
+                      "dirty";
+                  "org.opencontainers.image.source" = "https://github.com/adamtopaz/polis";
+                };
+                User = "10001:10001";
+                WorkingDir = "/workspaces";
+              };
+            };
         in
         {
           default = programs;
@@ -160,51 +206,24 @@
               WorkingDir = "/";
             };
           };
-          pi-container = pkgs.dockerTools.buildLayeredImage {
+          pi-container = workerContainer {
             name = "polis-pi";
-            tag = "dev";
-            contents = [
-              polis
-              worker
-              demoAgent
+            description = "Production Polis worker with the Pi SDK agent runtime";
+            runtimeContents = [
               piRuntime
-              pkgs.bashInteractive
-              pkgs.cacert
-              pkgs.coreutils
               pkgs.findutils
               pkgs.gitMinimal
               pkgs.gnugrep
               pkgs.gnused
               pkgs.nodejs_22
               pkgs.ripgrep
-              pkgs.tini
             ];
-            config = {
-              Cmd = [
-                "/bin/tini"
-                "--"
-                "/bin/polis-worker"
-              ];
-              Env = [
-                "NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-bundle.crt"
-                "PATH=/bin"
-                "POLIS_WORKSPACE_ROOT=/workspaces"
-                "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
-              ];
-              Labels = {
-                "org.opencontainers.image.description" = "Polis worker with the Pi SDK agent runtime";
-                "org.opencontainers.image.revision" =
-                  if self ? rev then
-                    self.rev
-                  else if self ? dirtyRev then
-                    self.dirtyRev
-                  else
-                    "dirty";
-                "org.opencontainers.image.source" = "https://github.com/adamtopaz/polis";
-              };
-              User = "10001:10001";
-              WorkingDir = "/workspaces";
-            };
+            extraEnv = [ "NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-bundle.crt" ];
+          };
+          demo-container = workerContainer {
+            name = "polis-demo";
+            description = "Polis worker with the deterministic demo runtime";
+            runtimeContents = [ demoAgent ];
           };
         }
       );

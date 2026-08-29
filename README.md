@@ -54,7 +54,7 @@ operator, another agent, or a scheduled self-message supplies a trigger.
 | `polis-controller` | Infrastructure | Stores state and serves the HTTP API. |
 | `polis-worker` | Infrastructure | Leases active agents and supervises their runtime processes. |
 | `polis-pi-agent` | Agent runtime | Persistent TypeScript runtime built directly on the Pi SDK. |
-| `polis-demo-agent` | Tests | Deterministic persistent runtime used by smoke tests; it is not an AI agent. |
+| `polis-demo-agent` | Tests | Deterministic persistent runtime distributed only in the demo worker image; it is not an AI agent. |
 
 The controller stores agent records, mailboxes, scheduled messages, journals,
 and fenced leases in one bbolt database. Workers lease ready agents and execute
@@ -230,8 +230,9 @@ Polis currently uses three deliberately small bearer-token boundaries:
 
 The worker can consume its credential from a temporary file before starting
 agent runtimes. Operator and worker token variables are removed from the child
-environment. The controller image contains `polisctl`; the Pi worker image
-contains the agent-facing `polis` but deliberately omits `polisctl`.
+environment. The controller image contains `polisctl`; both worker images
+contain the agent-facing `polis` but deliberately omit `polisctl`. The
+production Pi image contains no demo runtime code.
 
 `/v1/agents` and `/v1/events` require the operator token.
 `/v1/worker/acquire` requires the worker token. Heartbeats, exits, and
@@ -249,6 +250,7 @@ npm --prefix runtime/pi test
 nix flake check
 nix build .#container
 nix build .#pi-container
+nix build .#demo-container
 ```
 
 The main flake outputs are:
@@ -262,7 +264,8 @@ The main flake outputs are:
 | `.#demo-agent` | Deterministic test runtime. |
 | `.#pi-runtime` | Persistent Pi SDK runtime. |
 | `.#container` | Controller image containing `polis-controller` and `polisctl`. |
-| `.#pi-container` | Worker image containing `polis-worker`, `polis`, and the Pi and demo runtimes. |
+| `.#pi-container` | Production `polis-pi` worker image containing only the Pi runtime. |
+| `.#demo-container` | `polis-demo` worker image containing only the deterministic demo runtime. |
 
 For a local process-level experiment, run the controller and worker in separate
 terminals with distinct development-only credentials:
@@ -281,6 +284,12 @@ Then use `POLIS_OPERATOR_TOKEN=dev-operator nix run .#polisctl -- ...` from a
 third terminal. Any configured runtime executable must be available in the
 worker's environment. The companion local deployment repository provides the
 tested k3s workflow and a worker image with the Pi runtime already installed.
+
+The Pi and demo worker images are intentionally separate. The current
+controller does not route leases by runtime availability, so do not mix
+incompatible worker images in one pool: every worker in a pool must contain the
+executables configured for the agents it may acquire. The local k3s deployment
+uses only the production Pi image.
 
 ## Deliberate limits
 
