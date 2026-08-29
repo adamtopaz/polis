@@ -61,11 +61,16 @@ func runServer(ctx context.Context, args []string) error {
 	flags := flag.NewFlagSet("server", flag.ContinueOnError)
 	listen := flags.String("listen", env("POLIS_LISTEN", ":8080"), "HTTP listen address")
 	dbPath := flags.String("db", env("POLIS_DB_PATH", "./polis.db"), "database path")
+	operatorTokenFile := flags.String("operator-token-file", env("POLIS_OPERATOR_TOKEN_FILE", ""), "path to the operator token")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return errors.New("server takes no positional arguments")
+	}
+	operatorToken, err := loadOperatorToken(*operatorTokenFile)
+	if err != nil {
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(*dbPath), 0o750); err != nil {
 		return fmt.Errorf("create database directory: %w", err)
@@ -79,7 +84,7 @@ func runServer(ctx context.Context, args []string) error {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	server := &http.Server{
 		Addr:              *listen,
-		Handler:           api.New(database, logger).Handler(),
+		Handler:           api.New(database, logger, operatorToken).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -145,7 +150,11 @@ func runAgentCommand(ctx context.Context, args []string) error {
 		if err := json.Unmarshal([]byte(*runtimeJSON), &runtime); err != nil {
 			return fmt.Errorf("parse runtime: %w", err)
 		}
-		agent, err := client.New(*url).CreateAgent(ctx, *id, *charter, runtime)
+		api, err := operatorClient(*url)
+		if err != nil {
+			return err
+		}
+		agent, err := api.CreateAgent(ctx, *id, *charter, runtime)
 		return printJSON(agent, err)
 	case "list":
 		flags := flag.NewFlagSet("agent list", flag.ContinueOnError)
@@ -153,7 +162,11 @@ func runAgentCommand(ctx context.Context, args []string) error {
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
-		agents, err := client.New(*url).ListAgents(ctx)
+		api, err := operatorClient(*url)
+		if err != nil {
+			return err
+		}
+		agents, err := api.ListAgents(ctx)
 		return printJSON(map[string]any{"items": agents}, err)
 	case "get":
 		flags := flag.NewFlagSet("agent get", flag.ContinueOnError)
@@ -164,7 +177,11 @@ func runAgentCommand(ctx context.Context, args []string) error {
 		if flags.NArg() != 1 {
 			return errors.New("agent get requires an agent id")
 		}
-		agent, err := client.New(*url).GetAgent(ctx, flags.Arg(0))
+		api, err := operatorClient(*url)
+		if err != nil {
+			return err
+		}
+		agent, err := api.GetAgent(ctx, flags.Arg(0))
 		return printJSON(agent, err)
 	case "state":
 		flags := flag.NewFlagSet("agent state", flag.ContinueOnError)
@@ -175,7 +192,11 @@ func runAgentCommand(ctx context.Context, args []string) error {
 		if flags.NArg() != 2 {
 			return errors.New("agent state requires an agent id and active, paused, or terminated")
 		}
-		agent, err := client.New(*url).SetState(ctx, flags.Arg(0), model.State(flags.Arg(1)))
+		api, err := operatorClient(*url)
+		if err != nil {
+			return err
+		}
+		agent, err := api.SetState(ctx, flags.Arg(0), model.State(flags.Arg(1)))
 		return printJSON(agent, err)
 	default:
 		return errors.New("agent requires create, list, get, or state")
@@ -196,7 +217,11 @@ func runMessageCommand(ctx context.Context, args []string) error {
 	if !json.Valid(body) {
 		return errors.New("message body must be valid JSON")
 	}
-	message, err := client.New(*url).SendControlMessage(ctx, flags.Arg(0), *sender, body)
+	api, err := operatorClient(*url)
+	if err != nil {
+		return err
+	}
+	message, err := api.SendControlMessage(ctx, flags.Arg(0), *sender, body)
 	return printJSON(message, err)
 }
 
@@ -213,7 +238,11 @@ func runEventsCommand(ctx context.Context, args []string) error {
 	if flags.NArg() == 1 {
 		id = flags.Arg(0)
 	}
-	events, err := client.New(*url).Events(ctx, id)
+	api, err := operatorClient(*url)
+	if err != nil {
+		return err
+	}
+	events, err := api.Events(ctx, id)
 	return printJSON(map[string]any{"items": events}, err)
 }
 
@@ -274,4 +303,27 @@ func envInt(name string, fallback int) int {
 		return fallback
 	}
 	return parsed
+}
+
+func operatorClient(url string) (*client.Client, error) {
+	token, err := loadOperatorToken(os.Getenv("POLIS_OPERATOR_TOKEN_FILE"))
+	if err != nil {
+		return nil, err
+	}
+	return client.NewOperator(url, token), nil
+}
+
+func loadOperatorToken(path string) (string, error) {
+	token := strings.TrimSpace(os.Getenv("POLIS_OPERATOR_TOKEN"))
+	if path != "" {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("read operator token: %w", err)
+		}
+		token = strings.TrimSpace(string(contents))
+	}
+	if token == "" {
+		return "", errors.New("operator token required: set POLIS_OPERATOR_TOKEN_FILE or POLIS_OPERATOR_TOKEN")
+	}
+	return token, nil
 }

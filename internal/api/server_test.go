@@ -3,8 +3,10 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
@@ -21,11 +23,43 @@ func TestHTTPAgentLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	server := httptest.NewServer(New(database, slog.New(slog.NewTextHandler(io.Discard, nil))).Handler())
+	server := httptest.NewServer(New(database, slog.New(slog.NewTextHandler(io.Discard, nil)), "operator-secret").Handler())
 	defer server.Close()
 
 	ctx := context.Background()
-	api := client.New(server.URL)
+	api := client.NewOperator(server.URL, "operator-secret")
+	if _, err := client.New(server.URL).ListAgents(ctx); err == nil {
+		t.Fatal("operator route accepted no token")
+	} else {
+		var apiError *client.Error
+		if !errors.As(err, &apiError) || apiError.Status != 401 {
+			t.Fatalf("unauthorized request returned %T %v", err, err)
+		}
+	}
+	if _, err := client.NewOperator(server.URL, "wrong-secret").ListAgents(ctx); err == nil {
+		t.Fatal("operator route accepted the wrong token")
+	}
+	rawTokenRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/v1/agents", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawTokenRequest.Header.Set("Authorization", "operator-secret")
+	rawTokenResponse, err := http.DefaultClient.Do(rawTokenRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawTokenResponse.Body.Close()
+	if rawTokenResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("raw token status = %d", rawTokenResponse.StatusCode)
+	}
+	healthResponse, err := http.Get(server.URL + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	healthResponse.Body.Close()
+	if healthResponse.StatusCode != http.StatusOK {
+		t.Fatalf("health status = %d", healthResponse.StatusCode)
+	}
 	agent, err := api.CreateAgent(ctx, "http-agent", "Act autonomously.", []string{"runtime"})
 	if err != nil {
 		t.Fatal(err)

@@ -37,6 +37,10 @@ incarnation using the same identity and workspace. An agent can sleep, wake from
 a message, message or spawn another agent, append to its journal, or terminate
 itself.
 
+Operator routes use a separate bearer token. The controller and control CLI read
+it from `POLIS_OPERATOR_TOKEN_FILE`, or from `POLIS_OPERATOR_TOKEN` for local
+development. Workers and agent runtimes must never receive this token.
+
 The included `demo-agent` is a deterministic smoke-test runtime, not an AI agent.
 Real agents are independent executables or runner images and remain free to pick
 their own models, tools, memory formats, repositories, and decision loops.
@@ -55,23 +59,23 @@ nix build .#container
 Run a local controller and worker:
 
 ```console
-nix run -- server --db ./polis.db
+POLIS_OPERATOR_TOKEN=local-development-only nix run -- server --db ./polis.db
 nix run -- worker --workspace-root ./workspaces
 ```
 
 Create the smoke runtime:
 
 ```console
-nix run -- agent create \
+POLIS_OPERATOR_TOKEN=local-development-only nix run -- agent create \
   --id example \
   --charter 'Exercise the autonomous-agent lifecycle.' \
   --runtime '["polis","demo-agent"]'
 ```
 
-The control API is intentionally unauthenticated in this first experimental
-kernel; bind it only to a trusted network. Incarnation APIs require the current
-lease token. Workspace isolation and control-plane authentication belong at the
-Kubernetes boundary before exposing Polis outside that network.
+`/v1/agents` and `/v1/events` require the operator token. `/v1/worker` and
+`/v1/self` use incarnation lease tokens, while `/healthz` is unauthenticated.
+This is intentionally one simple authorization boundary rather than a roles or
+policy system.
 
 ## Deliberate limits
 

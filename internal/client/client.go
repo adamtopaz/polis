@@ -14,8 +14,9 @@ import (
 )
 
 type Client struct {
-	baseURL string
-	http    *http.Client
+	baseURL       string
+	operatorToken string
+	http          *http.Client
 }
 
 type Error struct {
@@ -32,9 +33,15 @@ func New(baseURL string) *Client {
 	}
 }
 
+func NewOperator(baseURL, token string) *Client {
+	client := New(baseURL)
+	client.operatorToken = token
+	return client
+}
+
 func (c *Client) CreateAgent(ctx context.Context, id, charter string, runtime []string) (model.Agent, error) {
 	var agent model.Agent
-	err := c.do(ctx, http.MethodPost, "/v1/agents", "", map[string]any{"id": id, "charter": charter, "runtime": runtime}, &agent)
+	err := c.do(ctx, http.MethodPost, "/v1/agents", c.operatorToken, map[string]any{"id": id, "charter": charter, "runtime": runtime}, &agent)
 	return agent, err
 }
 
@@ -42,25 +49,25 @@ func (c *Client) ListAgents(ctx context.Context) ([]model.Agent, error) {
 	var response struct {
 		Items []model.Agent `json:"items"`
 	}
-	err := c.do(ctx, http.MethodGet, "/v1/agents", "", nil, &response)
+	err := c.do(ctx, http.MethodGet, "/v1/agents", c.operatorToken, nil, &response)
 	return response.Items, err
 }
 
 func (c *Client) GetAgent(ctx context.Context, id string) (model.Agent, error) {
 	var agent model.Agent
-	err := c.do(ctx, http.MethodGet, "/v1/agents/"+id, "", nil, &agent)
+	err := c.do(ctx, http.MethodGet, "/v1/agents/"+id, c.operatorToken, nil, &agent)
 	return agent, err
 }
 
 func (c *Client) SetState(ctx context.Context, id string, state model.State) (model.Agent, error) {
 	var agent model.Agent
-	err := c.do(ctx, http.MethodPut, "/v1/agents/"+id+"/state", "", map[string]any{"state": state}, &agent)
+	err := c.do(ctx, http.MethodPut, "/v1/agents/"+id+"/state", c.operatorToken, map[string]any{"state": state}, &agent)
 	return agent, err
 }
 
 func (c *Client) SendControlMessage(ctx context.Context, id, sender string, body json.RawMessage) (model.Message, error) {
 	var message model.Message
-	err := c.do(ctx, http.MethodPost, "/v1/agents/"+id+"/messages", "", map[string]any{"sender": sender, "body": body}, &message)
+	err := c.do(ctx, http.MethodPost, "/v1/agents/"+id+"/messages", c.operatorToken, map[string]any{"sender": sender, "body": body}, &message)
 	return message, err
 }
 
@@ -72,7 +79,7 @@ func (c *Client) Events(ctx context.Context, id string) ([]model.Event, error) {
 	var response struct {
 		Items []model.Event `json:"items"`
 	}
-	err := c.do(ctx, http.MethodGet, path, "", nil, &response)
+	err := c.do(ctx, http.MethodGet, path, c.operatorToken, nil, &response)
 	return response.Items, err
 }
 

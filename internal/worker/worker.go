@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -97,7 +98,7 @@ func runIncarnation(parent context.Context, api *client.Client, config Config, l
 
 	command := exec.Command(lease.Agent.Runtime[0], lease.Agent.Runtime[1:]...)
 	command.Dir = workspace
-	command.Env = append(os.Environ(),
+	command.Env = append(withoutOperatorCredentials(os.Environ()),
 		"POLIS_URL="+config.ControllerURL,
 		"POLIS_AGENT_ID="+lease.Agent.ID,
 		"POLIS_AGENT_TOKEN="+lease.Token,
@@ -158,6 +159,17 @@ func runIncarnation(parent context.Context, api *client.Client, config Config, l
 			return
 		}
 	}
+}
+
+func withoutOperatorCredentials(environment []string) []string {
+	filtered := make([]string, 0, len(environment))
+	for _, variable := range environment {
+		if strings.HasPrefix(variable, "POLIS_OPERATOR_TOKEN=") || strings.HasPrefix(variable, "POLIS_OPERATOR_TOKEN_FILE=") {
+			continue
+		}
+		filtered = append(filtered, variable)
+	}
+	return filtered
 }
 
 func stop(command *exec.Cmd, done <-chan error, grace time.Duration) {

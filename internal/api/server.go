@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
@@ -15,24 +16,25 @@ import (
 )
 
 type Server struct {
-	store *store.Store
-	log   *slog.Logger
+	store         *store.Store
+	log           *slog.Logger
+	operatorToken string
 }
 
-func New(st *store.Store, logger *slog.Logger) *Server {
-	return &Server{store: st, log: logger}
+func New(st *store.Store, logger *slog.Logger, operatorToken string) *Server {
+	return &Server{store: st, log: logger, operatorToken: operatorToken}
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
-	mux.HandleFunc("POST /v1/agents", s.createAgent)
-	mux.HandleFunc("GET /v1/agents", s.listAgents)
-	mux.HandleFunc("GET /v1/agents/{id}", s.getAgent)
-	mux.HandleFunc("PUT /v1/agents/{id}/state", s.setState)
-	mux.HandleFunc("POST /v1/agents/{id}/messages", s.sendControlMessage)
-	mux.HandleFunc("GET /v1/agents/{id}/events", s.agentEvents)
-	mux.HandleFunc("GET /v1/events", s.events)
+	mux.Handle("POST /v1/agents", s.requireOperator(http.HandlerFunc(s.createAgent)))
+	mux.Handle("GET /v1/agents", s.requireOperator(http.HandlerFunc(s.listAgents)))
+	mux.Handle("GET /v1/agents/{id}", s.requireOperator(http.HandlerFunc(s.getAgent)))
+	mux.Handle("PUT /v1/agents/{id}/state", s.requireOperator(http.HandlerFunc(s.setState)))
+	mux.Handle("POST /v1/agents/{id}/messages", s.requireOperator(http.HandlerFunc(s.sendControlMessage)))
+	mux.Handle("GET /v1/agents/{id}/events", s.requireOperator(http.HandlerFunc(s.agentEvents)))
+	mux.Handle("GET /v1/events", s.requireOperator(http.HandlerFunc(s.events)))
 	mux.HandleFunc("POST /v1/worker/acquire", s.acquire)
 	mux.HandleFunc("POST /v1/worker/heartbeat", s.heartbeat)
 	mux.HandleFunc("POST /v1/worker/exited", s.exited)
@@ -45,6 +47,20 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/self/spawn", s.spawn)
 	mux.HandleFunc("POST /v1/self/journal", s.journal)
 	return s.recoverAndLog(mux)
+}
+
+func (s *Server) requireOperator(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provided := bearer(r)
+		if s.operatorToken == "" || len(provided) != len(s.operatorToken) || subtle.ConstantTimeCompare([]byte(provided), []byte(s.operatorToken)) != 1 {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "valid operator token required"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 type createAgentRequest struct {
@@ -321,7 +337,11 @@ func writeError(w http.ResponseWriter, err error) {
 }
 
 func bearer(r *http.Request) string {
-	return strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	scheme, token, found := strings.Cut(r.Header.Get("Authorization"), " ")
+	if !found || !strings.EqualFold(scheme, "Bearer") {
+		return ""
+	}
+	return token
 }
 
 func queryLimit(r *http.Request) int {
