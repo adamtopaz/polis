@@ -1,26 +1,67 @@
 # Polis
 
-Polis is a small lifecycle kernel for fleets of autonomous agents on Kubernetes.
-It manages whether an agent incarnation exists. It does not manage the agent's
-work.
+Polis is a small lifecycle kernel for fleets of autonomous agents on
+Kubernetes. It keeps agent runtimes alive, gives them durable identity and
+communication, and stays out of how they decide what to do.
 
-An agent is only:
+Polis deliberately has no task model, workflow engine, project model, planner,
+or model abstraction. An agent is only:
 
 - a stable identity and charter;
 - an arbitrary runtime command;
 - a durable workspace;
-- a durable mailbox and journal;
+- a durable mailbox and event journal;
 - an `active`, `paused`, or `terminated` desired state.
 
-`ready`, `running`, and crash `backoff` are derived from the desired state and
-incarnation lease. There are no tasks, workflows, project records, planners, or
-model abstractions in Polis.
+The project is experimental. The current implementation favors a small,
+understandable consistency model over premature scale machinery.
 
-## How it runs
+## The lifecycle model
 
-The controller stores agent records, mailboxes, events, and fenced leases in one
-bbolt file. Workers lease ready agents and run their configured executable in
-`<workspace-root>/<agent-id>`. The executable receives:
+An agent is a persistent logical identity, not an immortal Unix process. A
+worker runs one incarnation of that identity at a time. If the process, worker,
+or node disappears, another incarnation resumes with the same identity,
+workspace, mailbox, and runtime configuration.
+
+Desired state belongs to the operator:
+
+| State | Meaning |
+| --- | --- |
+| `active` | Polis maintains a running incarnation whenever capacity is available. |
+| `paused` | No incarnation runs; identity, workspace, mailbox, and history remain. |
+| `terminated` | The agent is permanently stopped and cannot be restarted or messaged. |
+
+The reported phase is derived rather than commanded:
+
+| Phase | Meaning |
+| --- | --- |
+| `ready` | Active and waiting for a worker slot. |
+| `running` | A worker owns a live incarnation lease. |
+| `backoff` | Active, but waiting briefly after an incarnation exited. |
+| `paused` | Desired state is paused. |
+| `terminated` | Desired state is terminated. |
+
+Creating an agent makes it active but does not send it a first message. Its
+runtime can initialize and wait without invoking an LLM. Work begins when an
+operator, another agent, or a scheduled self-message supplies a trigger.
+
+## Components
+
+| Program | Audience | Purpose |
+| --- | --- | --- |
+| `polis` | Agent runtime | Capability CLI for the current agent's mailbox, journal, scheduling, messaging, and spawning. |
+| `polisctl` | Operator | Creates, inspects, messages, pauses, resumes, and terminates agents. |
+| `polis-controller` | Infrastructure | Stores state and serves the HTTP API. |
+| `polis-worker` | Infrastructure | Leases active agents and supervises their runtime processes. |
+| `polis-pi-agent` | Agent runtime | Persistent TypeScript runtime built directly on the Pi SDK. |
+| `polis-demo-agent` | Tests | Deterministic persistent runtime used by smoke tests; it is not an AI agent. |
+
+The controller stores agent records, mailboxes, scheduled messages, journals,
+and fenced leases in one bbolt database. Workers lease ready agents and execute
+their runtime argument vector directly in
+`<workspace-root>/<agent-id>`. There is no intervening shell or workflow engine.
+
+Each runtime receives:
 
 ```text
 POLIS_URL
@@ -30,124 +71,176 @@ POLIS_WORKSPACE
 POLIS_CHARTER_PATH
 ```
 
-Every runtime can use the agent API without a language-specific SDK:
+`POLIS_AGENT_TOKEN` is both a short-lived API capability and an incarnation
+fence. The worker renews it while the runtime is healthy. If renewal is lost,
+the worker stops the process before the lease deadline so an old incarnation
+cannot continue alongside its replacement.
+
+## Operator workflow
+
+`polisctl` is a normal Go executable. It reads the controller URL from
+`POLIS_URL` (default `http://localhost:8080`) and the operator credential from
+`POLIS_OPERATOR_TOKEN_FILE`, or from `POLIS_OPERATOR_TOKEN` for local
+development. Every command emits JSON.
+
+Create a Pi agent:
+
+```console
+polisctl agent create \
+  --id researcher \
+  --charter 'Investigate your assigned subject autonomously and preserve useful findings.' \
+  --runtime '["polis-pi-agent","--model","openai-codex/gpt-5.5","--thinking","high"]'
+```
+
+The ID is generated when `--id` is omitted. The charter and runtime are stable
+configuration. Creation starts the persistent runtime but intentionally does
+not create a mailbox trigger.
+
+Send the first trigger and inspect progress:
+
+```console
+polisctl message researcher '{"task":"Compare durable coordination strategies."}'
+polisctl agent get researcher
+polisctl events researcher
+```
+
+Pause, resume, or permanently terminate it:
+
+```console
+polisctl agent state researcher paused
+polisctl agent state researcher active
+polisctl agent state researcher terminated
+```
+
+The full operator surface is:
+
+| Command | Effect |
+| --- | --- |
+| `polisctl agent create --charter TEXT --runtime JSON [--id ID]` | Create an active agent. `--runtime` is a JSON array containing an executable and its arguments. |
+| `polisctl agent list` | List all agents. |
+| `polisctl agent get ID` | Return one agent's configuration, desired state, phase, and current lease information. |
+| `polisctl agent state ID active\|paused\|terminated` | Change desired state. Termination is irreversible. |
+| `polisctl message [--sender LABEL] ID JSON` | Append a durable message. The default sender is `operator`. |
+| `polisctl events [ID]` | Return fleet-wide events or only one agent's lifecycle and journal events. |
+
+Flags such as `--sender` and `--url` must precede positional arguments.
+
+## Agent capabilities
+
+`polis` is also a normal Go executable, but it is intended only for code running
+inside an agent incarnation. It reads `POLIS_URL` and `POLIS_AGENT_TOKEN`
+automatically and emits JSON.
+
+| Command | Effect |
+| --- | --- |
+| `polis inspect` | Return the current agent's identity, charter, runtime, state, phase, and lease information. |
+| `polis messages` | Return mailbox messages after the acknowledgement cursor. |
+| `polis ack MESSAGE_ID` | Acknowledge that message and every earlier message. The cursor cannot move backward. |
+| `polis send AGENT_ID JSON` | Send a durable message to another non-terminated agent. |
+| `polis schedule DELAY JSON` | Schedule a durable message to self. Delays use Go duration syntax and must be at least one second. |
+| `polis spawn --charter TEXT --runtime JSON [--id ID]` | Create another active agent. It receives no initial trigger. |
+| `polis journal KIND JSON` | Append a durable, agent-authored event. |
+
+Examples:
 
 ```console
 polis inspect
 polis messages
 polis ack 42
-polis send another-agent '{"hello":"there"}'
-polis schedule 30m '{"reason":"continue"}'
+polis send another-agent '{"question":"What did you find?"}'
+polis schedule 30m '{"reason":"Review progress and continue."}'
 polis spawn --charter 'Investigate independently.' --runtime '["agent-runtime"]'
-polis journal decision.made '{"decision":"continue"}'
+polis journal decision.made '{"decision":"Continue the experiment."}'
 ```
 
-These commands read `POLIS_URL` and `POLIS_AGENT_TOKEN` automatically and emit
-JSON. Agents cannot pause or terminate themselves; the operator owns desired
-state. Scheduling creates a durable future mailbox message.
+Agents cannot pause, resume, or terminate themselves. Those are operator
+decisions. A message sent while the recipient is busy remains queued for its
+next turn. A scheduled message that becomes due while the agent is busy behaves
+the same way.
 
-The lease token is both the incarnation fence and the agent's API capability. A
-worker renews it while the process runs. If renewal is lost, the
-worker terminates the process before the lease deadline. A crash leads to a new
-incarnation using the same identity and workspace after a short backoff. An
-agent can wait for messages, schedule a future message to itself, message or
-spawn another agent, and append to its journal.
+## Pi SDK runtime
 
-`polis` contains only the agent capability commands above and reads only the
-incarnation token. `polisctl` contains operator commands for creating, listing,
-inspecting, messaging, pausing, resuming, and terminating agents. It reads the
-separate operator bearer token from `POLIS_OPERATOR_TOKEN_FILE`, or from
-`POLIS_OPERATOR_TOKEN` for local development.
-
-`polis-controller`, `polis-worker`, and `polis-demo-agent` are separate process
-entrypoints rather than commands exposed by either CLI. Worker lease acquisition
-requires its own bearer token. A worker can consume that token from a temporary
-file before starting any runtime, and control-plane token variables are removed
-from the runtime environment. The controller image contains `polisctl`; the
-worker image contains `polis` but not `polisctl`.
-
-The included `polis-demo-agent` is a deterministic persistent smoke-test
-runtime, not an AI agent.
-Real agents are independent executables or runner images and remain free to pick
-their own models, tools, memory formats, repositories, and decision loops.
-
-## Pi runtime
-
-`polis-pi-agent` is the first real runtime. It embeds the Pi SDK directly; it
-does not invoke the `pi` CLI or put another workflow engine between Pi and
-Polis. A runtime process and one Pi `AgentSession` stay alive for the whole
+`polis-pi-agent` embeds the Pi SDK directly; it does not shell out to the `pi`
+CLI. One runtime process and one Pi `AgentSession` remain alive for the whole
 incarnation:
 
-1. resumes the agent's most recent Pi session from
+1. resume the most recent session from
    `<workspace>/.polis/pi-sessions`;
-2. adds the stable identity and charter to Pi's system prompt;
-3. long-polls the durable mailbox without making any LLM call;
-4. on a message, supplies the queued batch to Pi and lets it take one complete
-   autonomous turn with its read, bash, edit, write, grep, find, and ls tools;
-5. acknowledges the batch after success, journals completion, and waits again
-   in the same session.
+2. append the stable agent identity and charter to Pi's system prompt;
+3. long-poll the durable mailbox without making LLM calls;
+4. supply each queued batch to Pi as one trigger;
+5. let Pi reason and use its read, Bash, edit, write, grep, find, and ls tools
+   until the turn reaches a stop reason;
+6. journal completion, acknowledge the batch, and return to mailbox waiting in
+   the same process and session.
 
-Messages received during a turn remain queued for the next turn. The agent can
-schedule its own future trigger with `polis schedule`. A model can be
-selected with `POLIS_PI_MODEL` using Pi's `provider/model[:thinking]` syntax. Pi
-otherwise restores the session model or selects an available model. Provider
-API-key environment variables are inherited by the runtime. An existing Pi
-`auth.json` can instead be supplied with `POLIS_PI_AUTH_FILE`; that file must be
-writable because Pi may refresh OAuth credentials.
+Messages arriving during a turn remain queued for the next turn. From Bash, the
+model can use `polis` to communicate, journal decisions, spawn agents, or
+schedule a future self-trigger.
 
-For explicit per-agent control, pass the model and thinking level as runtime
-arguments:
+Select a model with runtime arguments:
 
 ```console
 polisctl agent create \
   --charter 'Pursue this work carefully and autonomously.' \
-  --runtime '["polis-pi-agent","--model","openai-codex/gpt-5.5","--thinking","high"]'
+  --runtime '["polis-pi-agent","--model","provider/model","--thinking","high"]'
 ```
 
-`--model` accepts Pi's `provider/model` syntax. `--thinking` accepts `off`,
-`minimal`, `low`, `medium`, `high`, `xhigh`, or `max`, subject to the selected
-model's capabilities. Runtime arguments override `POLIS_PI_MODEL`; an explicit
-`--thinking` also overrides a thinking suffix in the model setting. Supplying
-only `--thinking` preserves Pi's restored or automatically selected model.
+`--thinking` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or
+`max`, subject to the selected model. Runtime arguments override
+`POLIS_PI_MODEL`, which accepts Pi's `provider/model[:thinking]` syntax. If no
+model is specified, Pi restores the session model or selects an available one.
 
-### Recovery semantics
+Provider API-key variables may be inherited by the runtime. Alternatively,
+`POLIS_PI_AUTH_FILE` may point to an existing Pi `auth.json`; the file must be
+writable because Pi can refresh OAuth credentials.
 
-An idle incarnation can restart without causing a turn. The replacement process
-resumes the same workspace and most recent Pi session, then waits for a message.
+## Delivery and recovery
 
-Mailbox delivery is at-least-once across failures. The runtime records
-`pi.turn.started` with the batch's message IDs before calling the model, but only
-acknowledges those IDs and records `pi.turn.completed` after the entire turn
-succeeds. If the process or worker disappears during a turn, the next
-incarnation receives the same unacknowledged batch. Tools may therefore have
-made partial durable changes before a retry; agents should inspect existing work
-and make consequential operations idempotent when practical.
+Mailbox delivery is at least once across failures. The Pi runtime records
+`pi.turn.started` before invoking the model, but records `pi.turn.completed` and
+advances the mailbox cursor only after the whole turn succeeds. If an
+incarnation disappears mid-turn, its replacement receives the same
+unacknowledged batch.
 
-The controller's bbolt file also contains active leases, mailboxes, scheduled
-messages, and journals. A brief controller outage is retried by a running Pi
-runtime and does not itself cause an LLM turn or a new incarnation. Workers
-still enforce the local lease deadline: if the controller remains unavailable
-past it, they stop their runtimes, and a replacement incarnation resumes after
-the controller returns. Completion is journaled before mailbox acknowledgement,
-so losing the lease during recovery leaves the message available for retry.
-During a Kubernetes handoff, a replacement controller waits for the old process
-to release bbolt's file lock instead of entering a crash loop.
+Tools may therefore have made partial durable changes before a retry. Agent
+work should inspect existing state and make consequential operations idempotent
+when practical.
 
-Create a Pi-backed agent by making its arbitrary runtime command the custom
-runner:
+An idle restart does not cause an LLM turn. The replacement incarnation resumes
+the same workspace and most recent Pi session, then waits for a message. A brief
+controller outage is retried by a running Pi runtime. If the outage lasts past
+the lease deadline, the worker fences the runtime and a replacement resumes
+after the controller returns.
 
-```console
-polisctl agent create \
-  --charter 'Explore this workspace and pursue useful work autonomously.' \
-  --runtime '["polis-pi-agent"]'
-```
+Completion is journaled before mailbox acknowledgement. If the lease is lost
+between those operations, the message remains available for retry. During a
+Kubernetes controller handoff, a replacement waits for the old process to
+release the bbolt file lock rather than entering a crash loop.
 
-The controller image remains `polis`. Workers that execute this runtime use the
-separate `polis-pi` image so the controller stays small.
+## Security boundaries
 
-## Development
+Polis currently uses three deliberately small bearer-token boundaries:
 
-This repository is a Nix flake:
+| Credential | Held by | Capability |
+| --- | --- | --- |
+| Operator token | `polisctl` and controller | Fleet administration and event inspection. |
+| Worker token | Controller and workers | Acquire a ready agent lease. |
+| Incarnation token | One worker and its runtime | Act only as the leased agent while that lease is valid. |
+
+The worker can consume its credential from a temporary file before starting
+agent runtimes. Operator and worker token variables are removed from the child
+environment. The controller image contains `polisctl`; the Pi worker image
+contains the agent-facing `polis` but deliberately omits `polisctl`.
+
+`/v1/agents` and `/v1/events` require the operator token.
+`/v1/worker/acquire` requires the worker token. Heartbeats, exits, and
+`/v1/self` requests require a valid incarnation token. `/healthz` is
+unauthenticated.
+
+## Build and development
+
+Polis is developed and packaged as a Nix flake:
 
 ```console
 nix develop
@@ -158,34 +251,48 @@ nix build .#container
 nix build .#pi-container
 ```
 
-Run a local controller and worker in separate terminals using distinct control
-credentials:
+The main flake outputs are:
+
+| Output | Contents |
+| --- | --- |
+| `.#polis` | Agent capability CLI. |
+| `.#polisctl` | Operator CLI. |
+| `.#controller` | Controller process. |
+| `.#worker` | Worker process. |
+| `.#demo-agent` | Deterministic test runtime. |
+| `.#pi-runtime` | Persistent Pi SDK runtime. |
+| `.#container` | Controller image containing `polis-controller` and `polisctl`. |
+| `.#pi-container` | Worker image containing `polis-worker`, `polis`, and the Pi and demo runtimes. |
+
+For a local process-level experiment, run the controller and worker in separate
+terminals with distinct development-only credentials:
 
 ```console
-POLIS_OPERATOR_TOKEN=local-operator POLIS_WORKER_TOKEN=local-worker \
+POLIS_OPERATOR_TOKEN=dev-operator POLIS_WORKER_TOKEN=dev-worker \
   nix run .#controller -- --db ./polis.db
-POLIS_WORKER_TOKEN=local-worker \
+```
+
+```console
+POLIS_WORKER_TOKEN=dev-worker \
   nix run .#worker -- --workspace-root ./workspaces
 ```
 
-Create the smoke runtime:
-
-```console
-POLIS_OPERATOR_TOKEN=local-operator nix run .#polisctl -- agent create \
-  --id example \
-  --charter 'Exercise the autonomous-agent lifecycle.' \
-  --runtime '["polis-demo-agent"]'
-```
-
-`/v1/agents` and `/v1/events` require the operator token.
-`/v1/worker/acquire` requires the worker token; heartbeat, exit, and `/v1/self`
-requests use incarnation lease tokens. `/healthz` is unauthenticated. These are
-three small capability boundaries rather than a roles or policy system.
+Then use `POLIS_OPERATOR_TOKEN=dev-operator nix run .#polisctl -- ...` from a
+third terminal. Any configured runtime executable must be available in the
+worker's environment. The companion local deployment repository provides the
+tested k3s workflow and a worker image with the Pi runtime already installed.
 
 ## Deliberate limits
 
-The initial controller is a single bbolt writer, so it is not highly available.
-That keeps the consistency model obvious while we learn. Every active persistent
-agent occupies one worker slot, so active capacity scales by adding workers or
-slots. Paused agents consume no slot. Moving state to a replicated database
-should happen only when measurements make that necessary.
+- The controller is one bbolt writer, not a highly available replicated
+  service.
+- Every active persistent agent occupies a worker slot, even while waiting
+  without making LLM calls. Capacity scales by adding workers or slots; paused
+  agents use none.
+- Workspaces are filesystem directories. Cross-node movement therefore depends
+  on the cluster's storage semantics.
+- There is no scheduler for projects or tasks beyond durable messages and agent
+  autonomy.
+
+These constraints keep the lifecycle and failure model obvious while real
+usage establishes what needs to scale next.
