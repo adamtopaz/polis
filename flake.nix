@@ -144,8 +144,10 @@
                 "worker"
               ];
               Env = [
+                "NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-bundle.crt"
                 "PATH=/bin"
                 "POLIS_WORKSPACE_ROOT=/workspaces"
+                "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
               ];
               Labels = {
                 "org.opencontainers.image.description" = "Polis worker with the Pi SDK agent runtime";
