@@ -97,9 +97,17 @@ func TestExpiredLeaseIsFencedAndReacquired(t *testing.T) {
 	if _, err := st.CreateAgent("alpha", "Persist.", []string{"runtime"}, "operator"); err != nil {
 		t.Fatal(err)
 	}
+	message, err := st.SendMessage("alpha", "operator", json.RawMessage(`{"work":"survive"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	first, err := st.Acquire("worker-1", 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
+	}
+	firstDelivery, err := st.Messages(first.Token, 100)
+	if err != nil || len(firstDelivery) != 1 || firstDelivery[0].ID != message.ID {
+		t.Fatalf("first delivery = %#v, %v", firstDelivery, err)
 	}
 	now = now.Add(6 * time.Second)
 	second, err := st.Acquire("worker-2", 5*time.Second)
@@ -114,6 +122,58 @@ func TestExpiredLeaseIsFencedAndReacquired(t *testing.T) {
 	}
 	if heartbeat, err := st.Heartbeat(second.Token, 5*time.Second); err != nil || !heartbeat.Continue {
 		t.Fatalf("new token rejected: %#v, %v", heartbeat, err)
+	}
+	secondDelivery, err := st.Messages(second.Token, 100)
+	if err != nil || len(secondDelivery) != 1 || secondDelivery[0].ID != message.ID {
+		t.Fatalf("recovered delivery = %#v, %v", secondDelivery, err)
+	}
+	if err := st.AckMessages(second.Token, message.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReportedExitPreservesUnreadMessages(t *testing.T) {
+	st := openTestStore(t)
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	st.now = func() time.Time { return now }
+	if _, err := st.CreateAgent("alpha", "Persist.", []string{"runtime"}, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	message, err := st.SendMessage("alpha", "operator", json.RawMessage(`{"work":"retry"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := st.Acquire("worker-1", 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivery, err := st.Messages(first.Token, 100)
+	if err != nil || len(delivery) != 1 || delivery[0].ID != message.ID {
+		t.Fatalf("first delivery = %#v, %v", delivery, err)
+	}
+	if err := st.Exit(first.Token, "worker restarting"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Self(first.Token); !errors.Is(err, ErrInvalidLease) {
+		t.Fatalf("exited token remains authorized: %v", err)
+	}
+	agent, err := st.GetAgent("alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPhase(t, agent, "backoff")
+
+	now = now.Add(5 * time.Second)
+	second, err := st.Acquire("worker-2", 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := st.Messages(second.Token, 100)
+	if err != nil || len(recovered) != 1 || recovered[0].ID != message.ID {
+		t.Fatalf("recovered delivery = %#v, %v", recovered, err)
+	}
+	if err := st.AckMessages(second.Token, message.ID); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -93,6 +93,11 @@ async function main(): Promise<void> {
       if (messages.length === 0) {
         continue;
       }
+      const messageIds = messages.map((message) => message.id);
+      await polis.journal("pi.turn.started", {
+        session_id: session.sessionId,
+        message_ids: messageIds,
+      }, shutdown.signal);
       log("turn.start", {
         agent: agent.id,
         session: session.sessionId,
@@ -115,6 +120,7 @@ async function main(): Promise<void> {
         session_file: session.sessionFile,
         model_provider: session.model?.provider,
         model_id: session.model?.id,
+        message_ids: messageIds,
         messages_acknowledged: messages.length,
       }, shutdown.signal);
       log("turn.complete", { agent: agent.id, messages_acknowledged: messages.length });

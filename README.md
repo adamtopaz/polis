@@ -86,6 +86,19 @@ API-key environment variables are inherited by the runtime. An existing Pi
 `auth.json` can instead be supplied with `POLIS_PI_AUTH_FILE`; that file must be
 writable because Pi may refresh OAuth credentials.
 
+### Recovery semantics
+
+An idle incarnation can restart without causing a turn. The replacement process
+resumes the same workspace and most recent Pi session, then waits for a message.
+
+Mailbox delivery is at-least-once across failures. The runtime records
+`pi.turn.started` with the batch's message IDs before calling the model, but only
+acknowledges those IDs and records `pi.turn.completed` after the entire turn
+succeeds. If the process or worker disappears during a turn, the next
+incarnation receives the same unacknowledged batch. Tools may therefore have
+made partial durable changes before a retry; agents should inspect existing work
+and make consequential operations idempotent when practical.
+
 Create a Pi-backed agent by making its arbitrary runtime command the custom
 runner:
 
