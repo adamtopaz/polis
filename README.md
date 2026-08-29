@@ -75,6 +75,10 @@ Build the OCI-compatible image archive with:
 nix build .#container
 ```
 
+Pushes to `main` run the same checks and publish the image as both
+`ghcr.io/adamtopaz/polis:main` and `ghcr.io/adamtopaz/polis:<commit-sha>`. Deployments can use
+the moving `main` tag for experimentation or pin the immutable commit tag.
+
 ## Executor protocol
 
 `POLIS_EXECUTOR_COMMAND` is either a JSON array or a shell-style command string. A runner starts

@@ -56,6 +56,17 @@
                 "PYTHONUNBUFFERED=1"
               ];
               ExposedPorts."8080/tcp" = { };
+              Labels = {
+                "org.opencontainers.image.description" = "Polis autonomous-agent fleet coordination kernel";
+                "org.opencontainers.image.revision" =
+                  if self ? rev then
+                    self.rev
+                  else if self ? dirtyRev then
+                    self.dirtyRev
+                  else
+                    "dirty";
+                "org.opencontainers.image.source" = "https://github.com/adamtopaz/polis";
+              };
               User = "10001:10001";
               WorkingDir = "/";
             };
@@ -70,12 +81,21 @@
         in
         {
           package = polisFor system;
-          lint = pkgs.runCommand "polis-lint" { nativeBuildInputs = [ pkgs.ruff ]; } ''
-            cd ${self}
-            ruff check --no-cache src tests
-            ruff format --no-cache --check src tests
-            touch $out
-          '';
+          lint =
+            pkgs.runCommand "polis-lint"
+              {
+                nativeBuildInputs = [
+                  pkgs.actionlint
+                  pkgs.ruff
+                ];
+              }
+              ''
+                cd ${self}
+                actionlint .github/workflows/*.yml
+                ruff check --no-cache src tests
+                ruff format --no-cache --check src tests
+                touch $out
+              '';
         }
       );
 
