@@ -23,6 +23,8 @@ var (
 	idPattern              = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 )
 
+const databaseOpenTimeout = 30 * time.Second
+
 var (
 	bucketMeta      = []byte("meta")
 	bucketAgents    = []byte("agents")
@@ -52,7 +54,7 @@ type Store struct {
 }
 
 func Open(path string) (*Store, error) {
-	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: 2 * time.Second})
+	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: databaseOpenTimeout})
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}

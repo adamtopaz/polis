@@ -106,6 +106,8 @@ still enforce the local lease deadline: if the controller remains unavailable
 past it, they stop their runtimes, and a replacement incarnation resumes after
 the controller returns. Completion is journaled before mailbox acknowledgement,
 so losing the lease during recovery leaves the message available for retry.
+During a Kubernetes handoff, a replacement controller waits for the old process
+to release bbolt's file lock instead of entering a crash loop.
 
 Create a Pi-backed agent by making its arbitrary runtime command the custom
 runner:
