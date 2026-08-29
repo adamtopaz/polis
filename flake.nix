@@ -1,5 +1,5 @@
 {
-  description = "Polis autonomous-agent fleet coordination kernel";
+  description = "Polis: a minimal lifecycle kernel for autonomous agents";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -17,19 +17,23 @@
         let
           pkgs = pkgsFor system;
         in
-        pkgs.python313Packages.buildPythonApplication {
-          pname = "polis-agent-fleet";
+        pkgs.buildGoModule {
+          pname = "polis";
           version = "0.1.0";
-          pyproject = true;
           src = self;
+          vendorHash = "sha256-sZ2i3aCVufv5d2/NWb2OpM7/omEo1RmVmfOou+WyVKM=";
+          subPackages = [ "./..." ];
 
-          build-system = [ pkgs.python313Packages.setuptools ];
-          nativeCheckInputs = [ pkgs.python313Packages.pytestCheckHook ];
-          pythonImportsCheck = [ "polis" ];
+          ldflags = [
+            "-s"
+            "-w"
+          ];
 
-          preCheck = ''
-            export HOME="$TMPDIR"
-          '';
+          meta = {
+            description = "Minimal lifecycle kernel for autonomous agents";
+            homepage = "https://github.com/adamtopaz/polis";
+            mainProgram = "polis";
+          };
         };
     in
     {
@@ -47,17 +51,22 @@
             contents = [
               polis
               pkgs.cacert
+              pkgs.tini
             ];
             config = {
-              Cmd = [ "/bin/polis-controller" ];
+              Cmd = [
+                "/bin/tini"
+                "--"
+                "/bin/polis"
+                "server"
+              ];
               Env = [
                 "PATH=/bin"
                 "POLIS_DB_PATH=/data/polis.db"
-                "PYTHONUNBUFFERED=1"
               ];
               ExposedPorts."8080/tcp" = { };
               Labels = {
-                "org.opencontainers.image.description" = "Polis autonomous-agent fleet coordination kernel";
+                "org.opencontainers.image.description" = "Polis autonomous-agent lifecycle kernel";
                 "org.opencontainers.image.revision" =
                   if self ? rev then
                     self.rev
@@ -81,21 +90,20 @@
         in
         {
           package = polisFor system;
-          lint =
-            pkgs.runCommand "polis-lint"
-              {
-                nativeBuildInputs = [
-                  pkgs.actionlint
-                  pkgs.ruff
-                ];
-              }
-              ''
-                cd ${self}
-                actionlint .github/workflows/*.yml
-                ruff check --no-cache src tests
-                ruff format --no-cache --check src tests
-                touch $out
-              '';
+          formatting = pkgs.runCommand "polis-formatting" { nativeBuildInputs = [ pkgs.go ]; } ''
+            cd ${self}
+            unformatted="$(gofmt -l .)"
+            if [ -n "$unformatted" ]; then
+              echo "$unformatted"
+              exit 1
+            fi
+            touch $out
+          '';
+          workflows = pkgs.runCommand "polis-workflows" { nativeBuildInputs = [ pkgs.actionlint ]; } ''
+            cd ${self}
+            actionlint .github/workflows/*.yml
+            touch $out
+          '';
         }
       );
 
@@ -107,23 +115,7 @@
         {
           default = {
             type = "app";
-            program = "${polis}/bin/polis-controller";
-            meta.description = "Run the Polis controller";
-          };
-          controller = {
-            type = "app";
-            program = "${polis}/bin/polis-controller";
-            meta.description = "Run the Polis controller";
-          };
-          runner = {
-            type = "app";
-            program = "${polis}/bin/polis-runner";
-            meta.description = "Run a Polis task runner";
-          };
-          cli = {
-            type = "app";
             program = "${polis}/bin/polis";
-            meta.description = "Control a Polis fleet";
           };
         }
       );
@@ -135,17 +127,13 @@
         in
         {
           default = pkgs.mkShell {
-            packages = with pkgs; [
-              curl
-              gnumake
-              jq
-              python313
-              ruff
-              sqlite
+            packages = [
+              pkgs.curl
+              pkgs.go
+              pkgs.gopls
+              pkgs.gotools
+              pkgs.jq
             ];
-            shellHook = ''
-              export PYTHONPATH="$PWD/src''${PYTHONPATH:+:$PYTHONPATH}"
-            '';
           };
         }
       );

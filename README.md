@@ -1,133 +1,82 @@
 # Polis
 
-Polis is an experimental coordination kernel for fleets of persistent autonomous agents.
-It deliberately starts small: durable state, logical agent identities, projects, queued work,
-and a lease protocol for disposable workers.
+Polis is a small lifecycle kernel for fleets of autonomous agents on Kubernetes.
+It manages whether an agent incarnation exists. It does not manage the agent's
+work.
 
-Polis is not an agent framework. An executor can be Codex, another model-driven program, or
-an ordinary command. Polis keeps that choice outside the coordination layer.
+An agent is only:
 
-## The model
+- a stable identity and charter;
+- an arbitrary runtime command;
+- a durable workspace;
+- a durable mailbox and journal;
+- an `active`, `paused`, or `terminated` desired state.
+
+`ready`, `running`, and `sleeping` are derived from the desired state, wake time,
+and incarnation lease. There are no tasks, workflows, project records, planners,
+or model abstractions in Polis.
+
+## How it runs
+
+The controller stores agent records, mailboxes, events, and fenced leases in one
+bbolt file. Workers lease ready agents and run their configured executable in
+`<workspace-root>/<agent-id>`. The executable receives:
 
 ```text
-operator / automation
-         |
-         v
-  Polis controller ---- SQLite state + ordered event log
-         ^
-         | lease / heartbeat / finish
-         |
-  many runner pods ---- one configured executor command per task
+POLIS_URL
+POLIS_AGENT_ID
+POLIS_AGENT_TOKEN
+POLIS_WORKSPACE
+POLIS_CHARTER_PATH
 ```
 
-- A **project** groups related work and can be paused independently.
-- An **agent** is a durable identity: instructions and JSON memory survive runner and node
-  restarts. One agent executes at most one task at a time.
-- A **task** is a durable unit of work for one project and one agent.
-- A **runner** is disposable compute. It leases a task, keeps the lease alive, invokes an
-  executor, and reports the outcome.
-- An **event** is an ordered record of each meaningful state transition.
+The lease token is both the incarnation fence and the agent's capability for the
+self API. A worker renews it while the process runs. If renewal is lost, the
+worker terminates the process before the lease deadline. A crash leads to a new
+incarnation using the same identity and workspace. An agent can sleep, wake from
+a message, message or spawn another agent, append to its journal, or terminate
+itself.
 
-The controller is a single process using SQLite in WAL mode. This is intentional for the first
-experiment: it gives us one deployable binary package, no service dependencies, and real crash
-recovery. Runner capacity scales horizontally, and thousands of idle logical agents consume no
-pods. The controller is neither highly available nor intended for unbounded write throughput;
-PostgreSQL is the obvious storage replacement if measurement proves it necessary.
+The included `demo-agent` is a deterministic smoke-test runtime, not an AI agent.
+Real agents are independent executables or runner images and remain free to pick
+their own models, tools, memory formats, repositories, and decision loops.
 
-## Development on NixOS
+## Development
 
-Enter the development environment and run the checks:
+This repository is a Nix flake:
 
 ```console
 nix develop
-make test
+go test ./...
 nix flake check
-```
-
-Run a controller with local durable state:
-
-```console
-POLIS_DB_PATH=./polis.db nix run .#controller
-```
-
-In another shell, create a project, an agent, and work:
-
-```console
-nix run .#cli -- create-project research --id research
-nix run .#cli -- create-agent scout --id scout \
-  --instructions 'Investigate assigned questions and retain useful context.'
-nix run .#cli -- create-task first-question --id first-question \
-  --project research --agent scout --input '{"question":"Why is the sky blue?"}'
-```
-
-Start a development runner. Its default executor is a deterministic echo program that exercises
-the full lifecycle and persistent-memory path:
-
-```console
-nix run .#runner
-nix run .#cli -- tasks --project research
-nix run .#cli -- events
-```
-
-Build the OCI-compatible image archive with:
-
-```console
 nix build .#container
 ```
 
-Pushes to `main` run the same checks and publish the image as both
-`ghcr.io/adamtopaz/polis:main` and `ghcr.io/adamtopaz/polis:<commit-sha>`. Deployments can use
-the moving `main` tag for experimentation or pin the immutable commit tag.
+Run a local controller and worker:
 
-## Executor protocol
-
-`POLIS_EXECUTOR_COMMAND` is either a JSON array or a shell-style command string. A runner starts
-the command once per task and writes one JSON object to its standard input:
-
-```json
-{
-  "project": {"id": "...", "name": "..."},
-  "agent": {"id": "...", "instructions": "...", "memory": {}},
-  "task": {"id": "...", "title": "...", "input": {}, "attempt": 1}
-}
+```console
+nix run -- server --db ./polis.db
+nix run -- worker --workspace-root ./workspaces
 ```
 
-On exit status zero, standard output is parsed as JSON and becomes the task output. If that JSON
-contains a top-level `memory` value, it atomically replaces the agent's durable memory when the
-task completes. A non-zero exit schedules a retry up to `max_attempts`; stderr is recorded as the
-failure reason. The runner heartbeats while the command is active.
+Create the smoke runtime:
 
-Delivery is **at least once**. A worker can perform an external side effect and crash before it
-reports completion, so real executors must make externally visible actions idempotent.
+```console
+nix run -- agent create \
+  --id example \
+  --charter 'Exercise the autonomous-agent lifecycle.' \
+  --runtime '["polis","demo-agent"]'
+```
 
-## Control API
+The control API is intentionally unauthenticated in this first experimental
+kernel; bind it only to a trusted network. Incarnation APIs require the current
+lease token. Workspace isolation and control-plane authentication belong at the
+Kubernetes boundary before exposing Polis outside that network.
 
-The JSON HTTP API currently exposes:
+## Deliberate limits
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/healthz`, `/v1/status` | Health and fleet counts |
-| `POST`, `GET` | `/v1/projects` | Create and list projects |
-| `PATCH` | `/v1/projects/{id}` | Set `active`, `paused`, or `archived` |
-| `POST`, `GET` | `/v1/agents` | Create and list durable agents |
-| `PATCH` | `/v1/agents/{id}` | Set `active`, `paused`, or `retired` |
-| `POST`, `GET` | `/v1/tasks` | Queue and list tasks |
-| `POST` | `/v1/tasks/{id}/cancel` | Cancel queued or leased work |
-| `GET` | `/v1/events` | Read the ordered event stream |
-| `POST` | `/v1/leases` | Atomically acquire runnable work |
-| `POST` | `/v1/tasks/{id}/{heartbeat,complete,fail}` | Drive a lease lifecycle |
-
-There is currently no authentication. Bind the controller only inside a trusted network.
-
-## What is intentionally absent
-
-- no workflow DSL or DAG engine;
-- no one-pod-per-agent model;
-- no built-in model provider or prompt abstraction;
-- no message broker, cache, operator, CRDs, or service mesh;
-- no multi-controller high availability yet;
-- no UI, RBAC, quotas, or per-project isolation yet.
-
-The next useful increment should come from running a real executor and observing the pressure it
-puts on this kernel, rather than predicting a large platform in advance. See
-[`docs/design.md`](docs/design.md) for invariants and extension seams.
+The initial controller is a single bbolt writer, so it is not highly available.
+That keeps the consistency model obvious while we learn. It can coordinate many
+dormant agents, while active capacity scales by adding workers or worker slots.
+Moving state to a replicated database should happen only when measurements make
+that necessary.

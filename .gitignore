@@ -1,13 +1,7 @@
-__pycache__/
-*.py[cod]
-.venv/
-.pytest_cache/
-.ruff_cache/
 *.db
-*.db-shm
-*.db-wal
-dist/
-build/
-*.egg-info/
+*.db.lock
+__pycache__/
+.ruff_cache/
+workspaces/
 result
 result-*

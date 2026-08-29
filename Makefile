@@ -1,13 +1,10 @@
-.PHONY: test run-controller run-runner
+.PHONY: build check dev
 
-PYTHONPATH := src
-export PYTHONPATH
+build:
+	nix build
 
-test:
-	python3 -m unittest discover -s tests -v
+check:
+	nix flake check --print-build-logs
 
-run-controller:
-	POLIS_DB_PATH=$${POLIS_DB_PATH:-./polis.db} python3 -m polis.controller
-
-run-runner:
-	python3 -m polis.runner
+dev:
+	nix develop
