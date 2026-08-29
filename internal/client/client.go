@@ -16,6 +16,7 @@ import (
 type Client struct {
 	baseURL       string
 	operatorToken string
+	workerToken   string
 	http          *http.Client
 }
 
@@ -36,6 +37,12 @@ func New(baseURL string) *Client {
 func NewOperator(baseURL, token string) *Client {
 	client := New(baseURL)
 	client.operatorToken = token
+	return client
+}
+
+func NewWorker(baseURL, token string) *Client {
+	client := New(baseURL)
+	client.workerToken = token
 	return client
 }
 
@@ -85,7 +92,7 @@ func (c *Client) Events(ctx context.Context, id string) ([]model.Event, error) {
 
 func (c *Client) Acquire(ctx context.Context, workerID string, ttl, wait time.Duration) (model.Lease, bool, error) {
 	var lease model.Lease
-	status, err := c.doStatus(ctx, http.MethodPost, "/v1/worker/acquire", "", map[string]any{
+	status, err := c.doStatus(ctx, http.MethodPost, "/v1/worker/acquire", c.workerToken, map[string]any{
 		"worker_id": workerID, "ttl_seconds": int64(ttl.Seconds()), "wait_seconds": int64(wait.Seconds()),
 	}, &lease)
 	if status == http.StatusNoContent && err == nil {

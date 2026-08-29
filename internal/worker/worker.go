@@ -19,6 +19,7 @@ import (
 
 type Config struct {
 	ControllerURL string
+	WorkerToken   string
 	ID            string
 	WorkspaceRoot string
 	LeaseDuration time.Duration
@@ -28,6 +29,9 @@ type Config struct {
 }
 
 func Run(ctx context.Context, config Config) error {
+	if config.WorkerToken == "" {
+		return errors.New("worker token is required")
+	}
 	if config.ID == "" {
 		return errors.New("worker id is required")
 	}
@@ -59,7 +63,7 @@ func Run(ctx context.Context, config Config) error {
 }
 
 func runSlot(ctx context.Context, config Config, slot int) error {
-	api := client.New(config.ControllerURL)
+	api := client.NewWorker(config.ControllerURL, config.WorkerToken)
 	workerID := config.ID + "/" + strconv.Itoa(slot)
 	log := config.Logger.With("worker", workerID)
 	for ctx.Err() == nil {
@@ -98,7 +102,7 @@ func runIncarnation(parent context.Context, api *client.Client, config Config, l
 
 	command := exec.Command(lease.Agent.Runtime[0], lease.Agent.Runtime[1:]...)
 	command.Dir = workspace
-	command.Env = append(withoutOperatorCredentials(os.Environ()),
+	command.Env = append(withoutControlPlaneCredentials(os.Environ()),
 		"POLIS_URL="+config.ControllerURL,
 		"POLIS_AGENT_ID="+lease.Agent.ID,
 		"POLIS_AGENT_TOKEN="+lease.Token,
@@ -161,10 +165,13 @@ func runIncarnation(parent context.Context, api *client.Client, config Config, l
 	}
 }
 
-func withoutOperatorCredentials(environment []string) []string {
+func withoutControlPlaneCredentials(environment []string) []string {
 	filtered := make([]string, 0, len(environment))
 	for _, variable := range environment {
-		if strings.HasPrefix(variable, "POLIS_OPERATOR_TOKEN=") || strings.HasPrefix(variable, "POLIS_OPERATOR_TOKEN_FILE=") {
+		if strings.HasPrefix(variable, "POLIS_OPERATOR_TOKEN=") ||
+			strings.HasPrefix(variable, "POLIS_OPERATOR_TOKEN_FILE=") ||
+			strings.HasPrefix(variable, "POLIS_WORKER_TOKEN=") ||
+			strings.HasPrefix(variable, "POLIS_WORKER_TOKEN_FILE=") {
 			continue
 		}
 		filtered = append(filtered, variable)

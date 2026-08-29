@@ -6,9 +6,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,31 +17,13 @@ import (
 	"github.com/adamtopaz/polis/internal/store"
 )
 
-func TestLoadOperatorToken(t *testing.T) {
-	t.Setenv("POLIS_OPERATOR_TOKEN", "")
-	if _, err := loadOperatorToken(""); err == nil {
-		t.Fatal("missing operator token was accepted")
-	}
-	t.Setenv("POLIS_OPERATOR_TOKEN", "from-environment")
-	if token, err := loadOperatorToken(""); err != nil || token != "from-environment" {
-		t.Fatalf("environment token = %q, %v", token, err)
-	}
-	path := filepath.Join(t.TempDir(), "operator-token")
-	if err := os.WriteFile(path, []byte("from-file\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if token, err := loadOperatorToken(path); err != nil || token != "from-file" {
-		t.Fatalf("file token = %q, %v", token, err)
-	}
-}
-
-func TestSelfCommands(t *testing.T) {
+func TestAgentCommands(t *testing.T) {
 	database, err := store.Open(filepath.Join(t.TempDir(), "polis.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	server := httptest.NewServer(api.New(database, slog.New(slog.NewTextHandler(io.Discard, nil)), "operator-secret").Handler())
+	server := httptest.NewServer(api.New(database, slog.New(slog.NewTextHandler(io.Discard, nil)), "operator-secret", "worker-secret").Handler())
 	defer server.Close()
 
 	if _, err := database.CreateAgent("parent", "Act independently.", []string{"runtime"}, "operator"); err != nil {
@@ -73,8 +55,8 @@ func TestSelfCommands(t *testing.T) {
 		{"schedule", "1h", `{"reason":"continue"}`},
 	}
 	for _, command := range commands {
-		if err := runSelfCommand(ctx, command); err != nil {
-			t.Fatalf("self %v: %v", command, err)
+		if err := run(ctx, command); err != nil {
+			t.Fatalf("polis %v: %v", command, err)
 		}
 	}
 
@@ -115,9 +97,27 @@ func TestSelfCommands(t *testing.T) {
 	}
 }
 
-func TestSelfRequiresAgentToken(t *testing.T) {
+func TestAgentCLIRequiresAgentToken(t *testing.T) {
 	t.Setenv("POLIS_AGENT_TOKEN", "")
-	if err := runSelfCommand(context.Background(), []string{"inspect"}); err == nil {
-		t.Fatal("self command accepted a missing agent token")
+	if err := run(context.Background(), []string{"inspect"}); err == nil {
+		t.Fatal("agent command accepted a missing agent token")
+	}
+}
+
+func TestAgentCLIRejectsNonAgentCommands(t *testing.T) {
+	t.Setenv("POLIS_AGENT_TOKEN", "agent-token")
+	for _, command := range [][]string{
+		{"agent", "list"},
+		{"message", "alpha", `{}`},
+		{"events"},
+		{"server"},
+		{"worker"},
+		{"demo-agent"},
+		{"self", "inspect"},
+	} {
+		err := run(context.Background(), command)
+		if err == nil || !strings.Contains(err.Error(), "capability CLI") {
+			t.Fatalf("non-agent command %v returned %v", command, err)
+		}
 	}
 }

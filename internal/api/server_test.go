@@ -23,7 +23,7 @@ func TestHTTPAgentLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	server := httptest.NewServer(New(database, slog.New(slog.NewTextHandler(io.Discard, nil)), "operator-secret").Handler())
+	server := httptest.NewServer(New(database, slog.New(slog.NewTextHandler(io.Discard, nil)), "operator-secret", "worker-secret").Handler())
 	defer server.Close()
 
 	ctx := context.Background()
@@ -67,7 +67,19 @@ func TestHTTPAgentLifecycle(t *testing.T) {
 	if agent.Phase != "ready" {
 		t.Fatalf("created agent phase = %q", agent.Phase)
 	}
-	lease, ok, err := api.Acquire(ctx, "test-worker", 30*time.Second, 0)
+	if _, _, err := client.New(server.URL).Acquire(ctx, "test-worker", 30*time.Second, 0); err == nil {
+		t.Fatal("worker acquire accepted no token")
+	} else {
+		var apiError *client.Error
+		if !errors.As(err, &apiError) || apiError.Status != 401 {
+			t.Fatalf("unauthorized worker acquire returned %T %v", err, err)
+		}
+	}
+	if _, _, err := client.NewWorker(server.URL, "wrong-secret").Acquire(ctx, "test-worker", 30*time.Second, 0); err == nil {
+		t.Fatal("worker acquire accepted the wrong token")
+	}
+	workerAPI := client.NewWorker(server.URL, "worker-secret")
+	lease, ok, err := workerAPI.Acquire(ctx, "test-worker", 30*time.Second, 0)
 	if err != nil || !ok {
 		t.Fatalf("acquire = %#v, %v, %v", lease, ok, err)
 	}

@@ -12,29 +12,58 @@
       ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       pkgsFor = system: import nixpkgs { inherit system; };
-      polisFor =
+      goProgramsFor =
         system:
         let
           pkgs = pkgsFor system;
         in
         pkgs.buildGoModule {
-          pname = "polis";
+          pname = "polis-programs";
           version = "0.1.0";
           src = self;
           vendorHash = "sha256-sZ2i3aCVufv5d2/NWb2OpM7/omEo1RmVmfOou+WyVKM=";
-          subPackages = [ "./..." ];
+          subPackages = [
+            "./cmd/polis"
+            "./cmd/polisctl"
+            "./cmd/polis-controller"
+            "./cmd/polis-worker"
+            "./cmd/polis-demo-agent"
+          ];
 
           ldflags = [
             "-s"
             "-w"
           ];
 
+          checkPhase = ''
+            runHook preCheck
+            go test ./...
+            runHook postCheck
+          '';
+
           meta = {
-            description = "Minimal lifecycle kernel for autonomous agents";
+            description = "Polis agent, operator, and infrastructure programs";
             homepage = "https://github.com/adamtopaz/polis";
-            mainProgram = "polis";
+            mainProgram = "polisctl";
           };
         };
+      programFor =
+        system: name: description:
+        let
+          pkgs = pkgsFor system;
+        in
+        pkgs.runCommand "${name}-0.1.0"
+          {
+            meta = {
+              inherit description;
+              homepage = "https://github.com/adamtopaz/polis";
+              mainProgram = name;
+            };
+          }
+          ''
+            mkdir -p $out/bin
+            cp ${goProgramsFor system}/bin/${name} $out/bin/${name}
+          '';
       piRuntimeFor =
         system:
         let
@@ -78,17 +107,30 @@
         system:
         let
           pkgs = pkgsFor system;
-          polis = polisFor system;
+          programs = goProgramsFor system;
+          polis = programFor system "polis" "Agent capability CLI for Polis";
+          polisctl = programFor system "polisctl" "Operator control CLI for Polis";
+          controller = programFor system "polis-controller" "Polis controller";
+          worker = programFor system "polis-worker" "Polis worker";
+          demoAgent = programFor system "polis-demo-agent" "Deterministic Polis test agent";
           piRuntime = piRuntimeFor system;
         in
         {
-          default = polis;
+          default = programs;
+          inherit
+            polis
+            polisctl
+            controller
+            worker
+            ;
+          demo-agent = demoAgent;
           pi-runtime = piRuntime;
           container = pkgs.dockerTools.buildLayeredImage {
             name = "polis";
             tag = "dev";
             contents = [
-              polis
+              controller
+              polisctl
               pkgs.cacert
               pkgs.tini
             ];
@@ -96,8 +138,7 @@
               Cmd = [
                 "/bin/tini"
                 "--"
-                "/bin/polis"
-                "server"
+                "/bin/polis-controller"
               ];
               Env = [
                 "PATH=/bin"
@@ -124,6 +165,8 @@
             tag = "dev";
             contents = [
               polis
+              worker
+              demoAgent
               piRuntime
               pkgs.bashInteractive
               pkgs.cacert
@@ -140,8 +183,7 @@
               Cmd = [
                 "/bin/tini"
                 "--"
-                "/bin/polis"
-                "worker"
+                "/bin/polis-worker"
               ];
               Env = [
                 "NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-bundle.crt"
@@ -173,7 +215,7 @@
           pkgs = pkgsFor system;
         in
         {
-          package = polisFor system;
+          package = goProgramsFor system;
           pi-runtime = piRuntimeFor system;
           formatting = pkgs.runCommand "polis-formatting" { nativeBuildInputs = [ pkgs.go ]; } ''
             cd ${self}
@@ -195,12 +237,36 @@
       apps = forAllSystems (
         system:
         let
-          polis = polisFor system;
+          polis = programFor system "polis" "Agent capability CLI for Polis";
+          polisctl = programFor system "polisctl" "Operator control CLI for Polis";
+          controller = programFor system "polis-controller" "Polis controller";
+          worker = programFor system "polis-worker" "Polis worker";
+          demoAgent = programFor system "polis-demo-agent" "Deterministic Polis test agent";
         in
         {
           default = {
             type = "app";
+            program = "${polisctl}/bin/polisctl";
+          };
+          polis = {
+            type = "app";
             program = "${polis}/bin/polis";
+          };
+          polisctl = {
+            type = "app";
+            program = "${polisctl}/bin/polisctl";
+          };
+          controller = {
+            type = "app";
+            program = "${controller}/bin/polis-controller";
+          };
+          worker = {
+            type = "app";
+            program = "${worker}/bin/polis-worker";
+          };
+          demo-agent = {
+            type = "app";
+            program = "${demoAgent}/bin/polis-demo-agent";
           };
         }
       );

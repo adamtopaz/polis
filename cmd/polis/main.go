@@ -6,22 +6,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/adamtopaz/polis/internal/api"
 	"github.com/adamtopaz/polis/internal/client"
-	"github.com/adamtopaz/polis/internal/demo"
-	"github.com/adamtopaz/polis/internal/model"
-	"github.com/adamtopaz/polis/internal/store"
-	"github.com/adamtopaz/polis/internal/worker"
 )
 
 func main() {
@@ -37,56 +29,39 @@ func run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return usageError()
 	}
-	switch args[0] {
-	case "server":
-		return runServer(ctx, args[1:])
-	case "worker":
-		return runWorker(ctx, args[1:])
-	case "agent":
-		return runAgentCommand(ctx, args[1:])
-	case "message":
-		return runMessageCommand(ctx, args[1:])
-	case "events":
-		return runEventsCommand(ctx, args[1:])
-	case "self":
-		return runSelfCommand(ctx, args[1:])
-	case "demo-agent":
-		return demo.Run(ctx)
-	case "help", "-h", "--help":
+	if args[0] == "spawn" {
+		return runSpawn(ctx, args[1:])
+	}
+	if args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		fmt.Print(usage())
 		return nil
+	}
+	switch args[0] {
+	case "inspect", "messages", "ack", "send", "schedule", "journal":
 	default:
 		return usageError()
 	}
-}
 
-func runSelfCommand(ctx context.Context, args []string) error {
-	if len(args) == 0 {
-		return errors.New("self requires inspect, messages, ack, send, schedule, spawn, or journal")
-	}
-	if args[0] == "spawn" {
-		return runSelfSpawn(ctx, args[1:])
-	}
-	api, token, positional, err := selfSession("self "+args[0], args[1:])
+	api, token, positional, err := agentSession(args[0], args[1:])
 	if err != nil {
 		return err
 	}
 	switch args[0] {
 	case "inspect":
 		if len(positional) != 0 {
-			return errors.New("self inspect takes no positional arguments")
+			return errors.New("inspect takes no positional arguments")
 		}
 		agent, err := api.Self(ctx, token)
 		return printJSON(agent, err)
 	case "messages":
 		if len(positional) != 0 {
-			return errors.New("self messages takes no positional arguments")
+			return errors.New("messages takes no positional arguments")
 		}
 		messages, err := api.Messages(ctx, token)
 		return printJSON(map[string]any{"items": messages}, err)
 	case "ack":
 		if len(positional) != 1 {
-			return errors.New("self ack requires a message id")
+			return errors.New("ack requires a message id")
 		}
 		through, err := strconv.ParseUint(positional[0], 10, 64)
 		if err != nil {
@@ -95,7 +70,7 @@ func runSelfCommand(ctx context.Context, args []string) error {
 		return printJSON(map[string]bool{"ok": true}, api.AckMessages(ctx, token, through))
 	case "send":
 		if len(positional) != 2 {
-			return errors.New("self send requires an agent id and a JSON body")
+			return errors.New("send requires an agent id and a JSON body")
 		}
 		body, err := rawJSON(positional[1])
 		if err != nil {
@@ -105,7 +80,7 @@ func runSelfCommand(ctx context.Context, args []string) error {
 		return printJSON(message, err)
 	case "schedule":
 		if len(positional) != 2 {
-			return errors.New("self schedule requires a delay and a JSON body")
+			return errors.New("schedule requires a delay and a JSON body")
 		}
 		delay, err := time.ParseDuration(positional[0])
 		if err != nil {
@@ -122,7 +97,7 @@ func runSelfCommand(ctx context.Context, args []string) error {
 		return printJSON(message, err)
 	case "journal":
 		if len(positional) != 2 {
-			return errors.New("self journal requires an event kind and JSON data")
+			return errors.New("journal requires an event kind and JSON data")
 		}
 		data, err := rawJSON(positional[1])
 		if err != nil {
@@ -131,12 +106,12 @@ func runSelfCommand(ctx context.Context, args []string) error {
 		event, err := api.Journal(ctx, token, positional[0], data)
 		return printJSON(event, err)
 	default:
-		return errors.New("self requires inspect, messages, ack, send, schedule, spawn, or journal")
+		return usageError()
 	}
 }
 
-func runSelfSpawn(ctx context.Context, args []string) error {
-	flags := flag.NewFlagSet("self spawn", flag.ContinueOnError)
+func runSpawn(ctx context.Context, args []string) error {
+	flags := flag.NewFlagSet("spawn", flag.ContinueOnError)
 	url := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "controller URL")
 	id := flags.String("id", "", "stable agent id (generated when omitted)")
 	charter := flags.String("charter", "", "agent charter")
@@ -145,7 +120,7 @@ func runSelfSpawn(ctx context.Context, args []string) error {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return errors.New("self spawn takes only flags")
+		return errors.New("spawn takes only flags")
 	}
 	var runtime []string
 	if err := json.Unmarshal([]byte(*runtimeJSON), &runtime); err != nil {
@@ -159,7 +134,7 @@ func runSelfSpawn(ctx context.Context, args []string) error {
 	return printJSON(agent, err)
 }
 
-func selfSession(name string, args []string) (*client.Client, string, []string, error) {
+func agentSession(name string, args []string) (*client.Client, string, []string, error) {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	url := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "controller URL")
 	if err := flags.Parse(args); err != nil {
@@ -188,195 +163,6 @@ func rawJSON(value string) (json.RawMessage, error) {
 	return raw, nil
 }
 
-func runServer(ctx context.Context, args []string) error {
-	flags := flag.NewFlagSet("server", flag.ContinueOnError)
-	listen := flags.String("listen", env("POLIS_LISTEN", ":8080"), "HTTP listen address")
-	dbPath := flags.String("db", env("POLIS_DB_PATH", "./polis.db"), "database path")
-	operatorTokenFile := flags.String("operator-token-file", env("POLIS_OPERATOR_TOKEN_FILE", ""), "path to the operator token")
-	if err := flags.Parse(args); err != nil {
-		return err
-	}
-	if flags.NArg() != 0 {
-		return errors.New("server takes no positional arguments")
-	}
-	operatorToken, err := loadOperatorToken(*operatorTokenFile)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(*dbPath), 0o750); err != nil {
-		return fmt.Errorf("create database directory: %w", err)
-	}
-	database, err := store.Open(*dbPath)
-	if err != nil {
-		return err
-	}
-	defer database.Close()
-
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	server := &http.Server{
-		Addr:              *listen,
-		Handler:           api.New(database, logger, operatorToken).Handler(),
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-	result := make(chan error, 1)
-	go func() {
-		logger.Info("controller listening", "address", *listen, "database", *dbPath)
-		result <- server.ListenAndServe()
-	}()
-	select {
-	case err := <-result:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
-		}
-		return err
-	case <-ctx.Done():
-		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		return server.Shutdown(shutdown)
-	}
-}
-
-func runWorker(ctx context.Context, args []string) error {
-	flags := flag.NewFlagSet("worker", flag.ContinueOnError)
-	controllerURL := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "controller URL")
-	id := flags.String("id", env("POLIS_WORKER_ID", env("HOSTNAME", "worker")), "worker id")
-	workspaceRoot := flags.String("workspace-root", env("POLIS_WORKSPACE_ROOT", "./workspaces"), "durable workspace root")
-	lease := flags.Duration("lease", envDuration("POLIS_LEASE_DURATION", 30*time.Second), "incarnation lease duration")
-	grace := flags.Duration("shutdown-grace", envDuration("POLIS_SHUTDOWN_GRACE", 10*time.Second), "runtime shutdown grace")
-	slots := flags.Int("slots", envInt("POLIS_SLOTS", 1), "concurrent agent processes")
-	if err := flags.Parse(args); err != nil {
-		return err
-	}
-	if flags.NArg() != 0 {
-		return errors.New("worker takes no positional arguments")
-	}
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	return worker.Run(ctx, worker.Config{
-		ControllerURL: *controllerURL,
-		ID:            *id,
-		WorkspaceRoot: *workspaceRoot,
-		LeaseDuration: *lease,
-		ShutdownGrace: *grace,
-		Slots:         *slots,
-		Logger:        logger,
-	})
-}
-
-func runAgentCommand(ctx context.Context, args []string) error {
-	if len(args) == 0 {
-		return errors.New("agent requires create, list, get, or state")
-	}
-	switch args[0] {
-	case "create":
-		flags := flag.NewFlagSet("agent create", flag.ContinueOnError)
-		url := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "controller URL")
-		id := flags.String("id", "", "stable agent id (generated when omitted)")
-		charter := flags.String("charter", "", "agent charter")
-		runtimeJSON := flags.String("runtime", "", "runtime argv as a JSON array")
-		if err := flags.Parse(args[1:]); err != nil {
-			return err
-		}
-		var runtime []string
-		if err := json.Unmarshal([]byte(*runtimeJSON), &runtime); err != nil {
-			return fmt.Errorf("parse runtime: %w", err)
-		}
-		api, err := operatorClient(*url)
-		if err != nil {
-			return err
-		}
-		agent, err := api.CreateAgent(ctx, *id, *charter, runtime)
-		return printJSON(agent, err)
-	case "list":
-		flags := flag.NewFlagSet("agent list", flag.ContinueOnError)
-		url := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "controller URL")
-		if err := flags.Parse(args[1:]); err != nil {
-			return err
-		}
-		api, err := operatorClient(*url)
-		if err != nil {
-			return err
-		}
-		agents, err := api.ListAgents(ctx)
-		return printJSON(map[string]any{"items": agents}, err)
-	case "get":
-		flags := flag.NewFlagSet("agent get", flag.ContinueOnError)
-		url := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "controller URL")
-		if err := flags.Parse(args[1:]); err != nil {
-			return err
-		}
-		if flags.NArg() != 1 {
-			return errors.New("agent get requires an agent id")
-		}
-		api, err := operatorClient(*url)
-		if err != nil {
-			return err
-		}
-		agent, err := api.GetAgent(ctx, flags.Arg(0))
-		return printJSON(agent, err)
-	case "state":
-		flags := flag.NewFlagSet("agent state", flag.ContinueOnError)
-		url := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "controller URL")
-		if err := flags.Parse(args[1:]); err != nil {
-			return err
-		}
-		if flags.NArg() != 2 {
-			return errors.New("agent state requires an agent id and active, paused, or terminated")
-		}
-		api, err := operatorClient(*url)
-		if err != nil {
-			return err
-		}
-		agent, err := api.SetState(ctx, flags.Arg(0), model.State(flags.Arg(1)))
-		return printJSON(agent, err)
-	default:
-		return errors.New("agent requires create, list, get, or state")
-	}
-}
-
-func runMessageCommand(ctx context.Context, args []string) error {
-	flags := flag.NewFlagSet("message", flag.ContinueOnError)
-	url := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "controller URL")
-	sender := flags.String("sender", "operator", "sender label")
-	if err := flags.Parse(args); err != nil {
-		return err
-	}
-	if flags.NArg() != 2 {
-		return errors.New("message requires an agent id and a JSON body")
-	}
-	body := json.RawMessage(flags.Arg(1))
-	if !json.Valid(body) {
-		return errors.New("message body must be valid JSON")
-	}
-	api, err := operatorClient(*url)
-	if err != nil {
-		return err
-	}
-	message, err := api.SendControlMessage(ctx, flags.Arg(0), *sender, body)
-	return printJSON(message, err)
-}
-
-func runEventsCommand(ctx context.Context, args []string) error {
-	flags := flag.NewFlagSet("events", flag.ContinueOnError)
-	url := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "controller URL")
-	if err := flags.Parse(args); err != nil {
-		return err
-	}
-	if flags.NArg() > 1 {
-		return errors.New("events accepts at most one agent id")
-	}
-	id := ""
-	if flags.NArg() == 1 {
-		id = flags.Arg(0)
-	}
-	api, err := operatorClient(*url)
-	if err != nil {
-		return err
-	}
-	events, err := api.Events(ctx, id)
-	return printJSON(map[string]any{"items": events}, err)
-}
-
 func printJSON(value any, err error) error {
 	if err != nil {
 		return err
@@ -391,24 +177,16 @@ func usageError() error {
 }
 
 func usage() string {
-	return `Polis manages the existence of autonomous agents, not their work.
+	return `Polis is the capability CLI for a running autonomous agent.
 
 Usage:
-  polis server [flags]
-  polis worker [flags]
-  polis agent create --charter TEXT --runtime '["command","arg"]' [--id ID]
-  polis agent list
-  polis agent get ID
-  polis agent state ID active|paused|terminated
-  polis message ID JSON
-  polis events [ID]
-  polis self inspect
-  polis self messages
-  polis self ack MESSAGE_ID
-  polis self send AGENT_ID JSON
-  polis self schedule DELAY JSON
-  polis self spawn --charter TEXT --runtime '["command","arg"]' [--id ID]
-  polis self journal KIND JSON
+  polis inspect
+  polis messages
+  polis ack MESSAGE_ID
+  polis send AGENT_ID JSON
+  polis schedule DELAY JSON
+  polis spawn --charter TEXT --runtime '["command","arg"]' [--id ID]
+  polis journal KIND JSON
 `
 }
 
@@ -417,51 +195,4 @@ func env(name, fallback string) string {
 		return value
 	}
 	return fallback
-}
-
-func envDuration(name string, fallback time.Duration) time.Duration {
-	value := os.Getenv(name)
-	if value == "" {
-		return fallback
-	}
-	parsed, err := time.ParseDuration(value)
-	if err != nil {
-		return fallback
-	}
-	return parsed
-}
-
-func envInt(name string, fallback int) int {
-	value := os.Getenv(name)
-	if value == "" {
-		return fallback
-	}
-	var parsed int
-	if _, err := fmt.Sscan(value, &parsed); err != nil {
-		return fallback
-	}
-	return parsed
-}
-
-func operatorClient(url string) (*client.Client, error) {
-	token, err := loadOperatorToken(os.Getenv("POLIS_OPERATOR_TOKEN_FILE"))
-	if err != nil {
-		return nil, err
-	}
-	return client.NewOperator(url, token), nil
-}
-
-func loadOperatorToken(path string) (string, error) {
-	token := strings.TrimSpace(os.Getenv("POLIS_OPERATOR_TOKEN"))
-	if path != "" {
-		contents, err := os.ReadFile(path)
-		if err != nil {
-			return "", fmt.Errorf("read operator token: %w", err)
-		}
-		token = strings.TrimSpace(string(contents))
-	}
-	if token == "" {
-		return "", errors.New("operator token required: set POLIS_OPERATOR_TOKEN_FILE or POLIS_OPERATOR_TOKEN")
-	}
-	return token, nil
 }

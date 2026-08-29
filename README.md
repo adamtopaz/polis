@@ -33,32 +33,41 @@ POLIS_CHARTER_PATH
 Every runtime can use the agent API without a language-specific SDK:
 
 ```console
-polis self inspect
-polis self messages
-polis self ack 42
-polis self send another-agent '{"hello":"there"}'
-polis self schedule 30m '{"reason":"continue"}'
-polis self spawn --charter 'Investigate independently.' --runtime '["agent-runtime"]'
-polis self journal decision.made '{"decision":"continue"}'
+polis inspect
+polis messages
+polis ack 42
+polis send another-agent '{"hello":"there"}'
+polis schedule 30m '{"reason":"continue"}'
+polis spawn --charter 'Investigate independently.' --runtime '["agent-runtime"]'
+polis journal decision.made '{"decision":"continue"}'
 ```
 
 These commands read `POLIS_URL` and `POLIS_AGENT_TOKEN` automatically and emit
 JSON. Agents cannot pause or terminate themselves; the operator owns desired
 state. Scheduling creates a durable future mailbox message.
 
-The lease token is both the incarnation fence and the agent's capability for the
-self API. A worker renews it while the process runs. If renewal is lost, the
+The lease token is both the incarnation fence and the agent's API capability. A
+worker renews it while the process runs. If renewal is lost, the
 worker terminates the process before the lease deadline. A crash leads to a new
 incarnation using the same identity and workspace after a short backoff. An
 agent can wait for messages, schedule a future message to itself, message or
 spawn another agent, and append to its journal.
 
-Operator routes use a separate bearer token. The controller and control CLI read
-it from `POLIS_OPERATOR_TOKEN_FILE`, or from `POLIS_OPERATOR_TOKEN` for local
-development. Workers and agent runtimes must never receive this token.
+`polis` contains only the agent capability commands above and reads only the
+incarnation token. `polisctl` contains operator commands for creating, listing,
+inspecting, messaging, pausing, resuming, and terminating agents. It reads the
+separate operator bearer token from `POLIS_OPERATOR_TOKEN_FILE`, or from
+`POLIS_OPERATOR_TOKEN` for local development.
 
-The included `demo-agent` is a deterministic persistent smoke-test runtime, not
-an AI agent.
+`polis-controller`, `polis-worker`, and `polis-demo-agent` are separate process
+entrypoints rather than commands exposed by either CLI. Worker lease acquisition
+requires its own bearer token. A worker can consume that token from a temporary
+file before starting any runtime, and control-plane token variables are removed
+from the runtime environment. The controller image contains `polisctl`; the
+worker image contains `polis` but not `polisctl`.
+
+The included `polis-demo-agent` is a deterministic persistent smoke-test
+runtime, not an AI agent.
 Real agents are independent executables or runner images and remain free to pick
 their own models, tools, memory formats, repositories, and decision loops.
 
@@ -79,7 +88,7 @@ incarnation:
    in the same session.
 
 Messages received during a turn remain queued for the next turn. The agent can
-schedule its own future trigger with `polis self schedule`. A model can be
+schedule its own future trigger with `polis schedule`. A model can be
 selected with `POLIS_PI_MODEL` using Pi's `provider/model[:thinking]` syntax. Pi
 otherwise restores the session model or selects an available model. Provider
 API-key environment variables are inherited by the runtime. An existing Pi
@@ -90,7 +99,7 @@ For explicit per-agent control, pass the model and thinking level as runtime
 arguments:
 
 ```console
-polis agent create \
+polisctl agent create \
   --charter 'Pursue this work carefully and autonomously.' \
   --runtime '["polis-pi-agent","--model","openai-codex/gpt-5.5","--thinking","high"]'
 ```
@@ -128,7 +137,7 @@ Create a Pi-backed agent by making its arbitrary runtime command the custom
 runner:
 
 ```console
-polis agent create \
+polisctl agent create \
   --charter 'Explore this workspace and pursue useful work autonomously.' \
   --runtime '["polis-pi-agent"]'
 ```
@@ -149,26 +158,29 @@ nix build .#container
 nix build .#pi-container
 ```
 
-Run a local controller and worker:
+Run a local controller and worker in separate terminals using distinct control
+credentials:
 
 ```console
-POLIS_OPERATOR_TOKEN=local-development-only nix run -- server --db ./polis.db
-nix run -- worker --workspace-root ./workspaces
+POLIS_OPERATOR_TOKEN=local-operator POLIS_WORKER_TOKEN=local-worker \
+  nix run .#controller -- --db ./polis.db
+POLIS_WORKER_TOKEN=local-worker \
+  nix run .#worker -- --workspace-root ./workspaces
 ```
 
 Create the smoke runtime:
 
 ```console
-POLIS_OPERATOR_TOKEN=local-development-only nix run -- agent create \
+POLIS_OPERATOR_TOKEN=local-operator nix run .#polisctl -- agent create \
   --id example \
   --charter 'Exercise the autonomous-agent lifecycle.' \
-  --runtime '["polis","demo-agent"]'
+  --runtime '["polis-demo-agent"]'
 ```
 
-`/v1/agents` and `/v1/events` require the operator token. `/v1/worker` and
-`/v1/self` use incarnation lease tokens, while `/healthz` is unauthenticated.
-This is intentionally one simple authorization boundary rather than a roles or
-policy system.
+`/v1/agents` and `/v1/events` require the operator token.
+`/v1/worker/acquire` requires the worker token; heartbeat, exit, and `/v1/self`
+requests use incarnation lease tokens. `/healthz` is unauthenticated. These are
+three small capability boundaries rather than a roles or policy system.
 
 ## Deliberate limits
 

@@ -19,10 +19,11 @@ type Server struct {
 	store         *store.Store
 	log           *slog.Logger
 	operatorToken string
+	workerToken   string
 }
 
-func New(st *store.Store, logger *slog.Logger, operatorToken string) *Server {
-	return &Server{store: st, log: logger, operatorToken: operatorToken}
+func New(st *store.Store, logger *slog.Logger, operatorToken, workerToken string) *Server {
+	return &Server{store: st, log: logger, operatorToken: operatorToken, workerToken: workerToken}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -35,7 +36,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/agents/{id}/messages", s.requireOperator(http.HandlerFunc(s.sendControlMessage)))
 	mux.Handle("GET /v1/agents/{id}/events", s.requireOperator(http.HandlerFunc(s.agentEvents)))
 	mux.Handle("GET /v1/events", s.requireOperator(http.HandlerFunc(s.events)))
-	mux.HandleFunc("POST /v1/worker/acquire", s.acquire)
+	mux.Handle("POST /v1/worker/acquire", s.requireWorker(http.HandlerFunc(s.acquire)))
 	mux.HandleFunc("POST /v1/worker/heartbeat", s.heartbeat)
 	mux.HandleFunc("POST /v1/worker/exited", s.exited)
 	mux.HandleFunc("GET /v1/self", s.self)
@@ -49,13 +50,21 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) requireOperator(next http.Handler) http.Handler {
+	return requireToken(s.operatorToken, "operator", next)
+}
+
+func (s *Server) requireWorker(next http.Handler) http.Handler {
+	return requireToken(s.workerToken, "worker", next)
+}
+
+func requireToken(expected, role string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		provided := bearer(r)
-		if s.operatorToken == "" || len(provided) != len(s.operatorToken) || subtle.ConstantTimeCompare([]byte(provided), []byte(s.operatorToken)) != 1 {
+		if expected == "" || len(provided) != len(expected) || subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) != 1 {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "valid operator token required"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "valid " + role + " token required"})
 			return
 		}
 		next.ServeHTTP(w, r)
