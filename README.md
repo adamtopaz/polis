@@ -30,6 +30,23 @@ POLIS_WORKSPACE
 POLIS_CHARTER_PATH
 ```
 
+Every runtime can use the agent API without a language-specific SDK:
+
+```console
+polis self inspect
+polis self messages
+polis self ack 42
+polis self send another-agent '{"hello":"there"}'
+polis self spawn --charter 'Investigate independently.' --runtime '["agent-runtime"]'
+polis self journal decision.made '{"decision":"continue"}'
+polis self sleep 30m
+polis self terminate
+```
+
+These commands read `POLIS_URL` and `POLIS_AGENT_TOKEN` automatically and emit
+JSON. `sleep` and `terminate` revoke the current incarnation, so an agent should
+use them as its final operation before exiting.
+
 The lease token is both the incarnation fence and the agent's capability for the
 self API. A worker renews it while the process runs. If renewal is lost, the
 worker terminates the process before the lease deadline. A crash leads to a new
@@ -41,7 +58,8 @@ Operator routes use a separate bearer token. The controller and control CLI read
 it from `POLIS_OPERATOR_TOKEN_FILE`, or from `POLIS_OPERATOR_TOKEN` for local
 development. Workers and agent runtimes must never receive this token.
 
-The included `demo-agent` is a deterministic smoke-test runtime, not an AI agent.
+The included `demo-agent` is a deterministic smoke-test runtime that exercises
+the `polis self` CLI, not an AI agent.
 Real agents are independent executables or runner images and remain free to pick
 their own models, tools, memory formats, repositories, and decision loops.
 

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -47,6 +48,8 @@ func run(ctx context.Context, args []string) error {
 		return runMessageCommand(ctx, args[1:])
 	case "events":
 		return runEventsCommand(ctx, args[1:])
+	case "self":
+		return runSelfCommand(ctx, args[1:])
 	case "demo-agent":
 		return demo.Run(ctx)
 	case "help", "-h", "--help":
@@ -55,6 +58,136 @@ func run(ctx context.Context, args []string) error {
 	default:
 		return usageError()
 	}
+}
+
+func runSelfCommand(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return errors.New("self requires inspect, messages, ack, send, spawn, journal, sleep, or terminate")
+	}
+	if args[0] == "spawn" {
+		return runSelfSpawn(ctx, args[1:])
+	}
+	api, token, positional, err := selfSession("self "+args[0], args[1:])
+	if err != nil {
+		return err
+	}
+	switch args[0] {
+	case "inspect":
+		if len(positional) != 0 {
+			return errors.New("self inspect takes no positional arguments")
+		}
+		agent, err := api.Self(ctx, token)
+		return printJSON(agent, err)
+	case "messages":
+		if len(positional) != 0 {
+			return errors.New("self messages takes no positional arguments")
+		}
+		messages, err := api.Messages(ctx, token)
+		return printJSON(map[string]any{"items": messages}, err)
+	case "ack":
+		if len(positional) != 1 {
+			return errors.New("self ack requires a message id")
+		}
+		through, err := strconv.ParseUint(positional[0], 10, 64)
+		if err != nil {
+			return fmt.Errorf("parse message id: %w", err)
+		}
+		return printJSON(map[string]bool{"ok": true}, api.AckMessages(ctx, token, through))
+	case "send":
+		if len(positional) != 2 {
+			return errors.New("self send requires an agent id and a JSON body")
+		}
+		body, err := rawJSON(positional[1])
+		if err != nil {
+			return err
+		}
+		message, err := api.SendMessage(ctx, token, positional[0], body)
+		return printJSON(message, err)
+	case "journal":
+		if len(positional) != 2 {
+			return errors.New("self journal requires an event kind and JSON data")
+		}
+		data, err := rawJSON(positional[1])
+		if err != nil {
+			return err
+		}
+		event, err := api.Journal(ctx, token, positional[0], data)
+		return printJSON(event, err)
+	case "sleep":
+		if len(positional) != 1 {
+			return errors.New("self sleep requires a duration such as 30m or 2h")
+		}
+		duration, err := time.ParseDuration(positional[0])
+		if err != nil {
+			return fmt.Errorf("parse sleep duration: %w", err)
+		}
+		if duration < time.Second {
+			return errors.New("sleep duration must be at least 1s")
+		}
+		agent, err := api.Sleep(ctx, token, duration)
+		return printJSON(agent, err)
+	case "terminate":
+		if len(positional) != 0 {
+			return errors.New("self terminate takes no positional arguments")
+		}
+		agent, err := api.TerminateSelf(ctx, token)
+		return printJSON(agent, err)
+	default:
+		return errors.New("self requires inspect, messages, ack, send, spawn, journal, sleep, or terminate")
+	}
+}
+
+func runSelfSpawn(ctx context.Context, args []string) error {
+	flags := flag.NewFlagSet("self spawn", flag.ContinueOnError)
+	url := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "controller URL")
+	id := flags.String("id", "", "stable agent id (generated when omitted)")
+	charter := flags.String("charter", "", "agent charter")
+	runtimeJSON := flags.String("runtime", "", "runtime argv as a JSON array")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("self spawn takes only flags")
+	}
+	var runtime []string
+	if err := json.Unmarshal([]byte(*runtimeJSON), &runtime); err != nil {
+		return fmt.Errorf("parse runtime: %w", err)
+	}
+	token, err := agentToken()
+	if err != nil {
+		return err
+	}
+	agent, err := client.New(*url).Spawn(ctx, token, *id, *charter, runtime)
+	return printJSON(agent, err)
+}
+
+func selfSession(name string, args []string) (*client.Client, string, []string, error) {
+	flags := flag.NewFlagSet(name, flag.ContinueOnError)
+	url := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "controller URL")
+	if err := flags.Parse(args); err != nil {
+		return nil, "", nil, err
+	}
+	token, err := agentToken()
+	if err != nil {
+		return nil, "", nil, err
+	}
+	return client.New(*url), token, flags.Args(), nil
+}
+
+func agentToken() (string, error) {
+	token := strings.TrimSpace(os.Getenv("POLIS_AGENT_TOKEN"))
+	if token == "" {
+		return "", errors.New("agent token required: set POLIS_AGENT_TOKEN")
+	}
+	return token, nil
+}
+
+func rawJSON(value string) (json.RawMessage, error) {
+	raw := json.RawMessage(value)
+	if !json.Valid(raw) {
+		return nil, errors.New("value must be valid JSON")
+	}
+	return raw, nil
 }
 
 func runServer(ctx context.Context, args []string) error {
@@ -271,6 +404,14 @@ Usage:
   polis agent state ID active|paused|terminated
   polis message ID JSON
   polis events [ID]
+  polis self inspect
+  polis self messages
+  polis self ack MESSAGE_ID
+  polis self send AGENT_ID JSON
+  polis self spawn --charter TEXT --runtime '["command","arg"]' [--id ID]
+  polis self journal KIND JSON
+  polis self sleep DURATION
+  polis self terminate
 `
 }
 
