@@ -112,9 +112,7 @@ func runIncarnation(parent context.Context, api *client.Client, config Config, l
 		"POLIS_AGENT_TOKEN=" + lease.Token,
 		"POLIS_WORKSPACE=" + workspace,
 		"POLIS_CHARTER_PATH=" + charterPath,
-	}
-	if additionalInstructionsPath != "" {
-		runtimeEnvironment = append(runtimeEnvironment, "POLIS_ADDITIONAL_INSTRUCTIONS_PATH="+additionalInstructionsPath)
+		"POLIS_ADDITIONAL_INSTRUCTIONS_PATH=" + additionalInstructionsPath,
 	}
 	command.Env = append(withoutControlPlaneCredentials(os.Environ()), runtimeEnvironment...)
 	command.Stdout = os.Stdout
@@ -177,9 +175,6 @@ func writePromptFiles(metadata, charter, additionalInstructions string) (string,
 	charterPath := filepath.Join(metadata, "charter.md")
 	if err := os.WriteFile(charterPath, []byte(charter+"\n"), 0o640); err != nil {
 		return "", "", fmt.Errorf("write charter: %w", err)
-	}
-	if strings.TrimSpace(additionalInstructions) == "" {
-		return charterPath, "", nil
 	}
 	additionalInstructionsPath := filepath.Join(metadata, "additional-instructions.md")
 	if err := os.WriteFile(additionalInstructionsPath, []byte(additionalInstructions+"\n"), 0o640); err != nil {

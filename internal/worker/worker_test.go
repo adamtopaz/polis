@@ -65,7 +65,11 @@ func TestWritePromptFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if additionalPath != "" {
-		t.Fatalf("omitted instructions path = %q", additionalPath)
+	contents, err := os.ReadFile(additionalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "\n" {
+		t.Fatalf("cleared additional instructions = %q, want one empty line", contents)
 	}
 }
