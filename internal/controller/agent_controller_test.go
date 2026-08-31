@@ -17,17 +17,21 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	polisv1alpha1 "github.com/adamtopaz/polis/api/v1alpha1"
@@ -123,6 +127,55 @@ func TestAgentReconcilerRejectsMultiplePersistentContainers(t *testing.T) {
 	if len(reconciled.Status.Conditions) != 1 || reconciled.Status.Conditions[0].Status != metav1.ConditionFalse {
 		t.Fatalf("status = %#v", reconciled.Status)
 	}
+}
+
+func TestAgentReconcilerRetriesDeploymentConflicts(t *testing.T) {
+	scheme := testScheme(t)
+	agent := testAgent()
+	stale := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+		Name: "polis-agent-researcher", Namespace: "polis",
+	}}
+	base := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&polisv1alpha1.Agent{}).WithObjects(agent, stale).Build()
+	conflicting := &conflictOnceClient{Client: base}
+	database, err := store.Open(filepath.Join(t.TempDir(), "polis.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	reconciler := &AgentReconciler{Client: conflicting, Scheme: scheme, Store: database}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: agent.Namespace, Name: agent.Name}}
+	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+		t.Fatalf("reconcile did not absorb a transient Deployment conflict: %v", err)
+	}
+	if !conflicting.returnedConflict {
+		t.Fatal("test client did not inject a Deployment conflict")
+	}
+
+	var deployment appsv1.Deployment
+	if err := base.Get(context.Background(), types.NamespacedName{Namespace: "polis", Name: "polis-agent-researcher"}, &deployment); err != nil {
+		t.Fatal(err)
+	}
+	if deployment.Spec.Replicas == nil || *deployment.Spec.Replicas != 1 {
+		t.Fatalf("Deployment was not reconciled after conflict: %#v", deployment.Spec)
+	}
+}
+
+type conflictOnceClient struct {
+	client.Client
+	returnedConflict bool
+}
+
+func (c *conflictOnceClient) Update(ctx context.Context, object client.Object, options ...client.UpdateOption) error {
+	if _, ok := object.(*appsv1.Deployment); ok && !c.returnedConflict {
+		c.returnedConflict = true
+		return apierrors.NewConflict(
+			schema.GroupResource{Group: "apps", Resource: "deployments"},
+			object.GetName(),
+			errors.New("injected conflict"),
+		)
+	}
+	return c.Client.Update(ctx, object, options...)
 }
 
 func testScheme(t *testing.T) *runtime.Scheme {

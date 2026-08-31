@@ -21,7 +21,7 @@
           pname = "polis-programs";
           version = "0.1.0";
           src = self;
-          vendorHash = "sha256-R48t/8qePdgu2OfFCqT36i35Ezql0KuLnaf4QUeVk0E=";
+          vendorHash = "sha256-o2tc3rupI/TKIYBh0+PTsBoYCAgtbpYf8soZuOr4d/Y=";
           subPackages = [
             "./cmd/polis"
             "./cmd/polisctl"

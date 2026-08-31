@@ -31,6 +31,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -117,23 +118,26 @@ func (r *AgentReconciler) reconcile(ctx context.Context, agent *polisv1alpha1.Ag
 }
 
 func (r *AgentReconciler) reconcileClaim(ctx context.Context, agent *polisv1alpha1.Agent, template *corev1.PersistentVolumeClaim, name string) error {
-	claim := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: agent.Namespace}}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, claim, func() error {
-		claim.Labels = mergeStringMaps(mergeStringMaps(claim.Labels, template.Labels), map[string]string{
-			"app.kubernetes.io/name":      "polis",
-			"app.kubernetes.io/component": "agent-workspace",
-			"polis.dev/agent":             agent.Name,
-		})
-		claim.Annotations = mergeStringMaps(claim.Annotations, template.Annotations)
-		if claim.ResourceVersion == "" {
-			claim.Spec = *template.Spec.DeepCopy()
-		} else if requested, ok := template.Spec.Resources.Requests[corev1.ResourceStorage]; ok {
-			if claim.Spec.Resources.Requests == nil {
-				claim.Spec.Resources.Requests = corev1.ResourceList{}
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		claim := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: agent.Namespace}}
+		_, err := controllerutil.CreateOrUpdate(ctx, r.Client, claim, func() error {
+			claim.Labels = mergeStringMaps(mergeStringMaps(claim.Labels, template.Labels), map[string]string{
+				"app.kubernetes.io/name":      "polis",
+				"app.kubernetes.io/component": "agent-workspace",
+				"polis.dev/agent":             agent.Name,
+			})
+			claim.Annotations = mergeStringMaps(claim.Annotations, template.Annotations)
+			if claim.ResourceVersion == "" {
+				claim.Spec = *template.Spec.DeepCopy()
+			} else if requested, ok := template.Spec.Resources.Requests[corev1.ResourceStorage]; ok {
+				if claim.Spec.Resources.Requests == nil {
+					claim.Spec.Resources.Requests = corev1.ResourceList{}
+				}
+				claim.Spec.Resources.Requests[corev1.ResourceStorage] = requested
 			}
-			claim.Spec.Resources.Requests[corev1.ResourceStorage] = requested
-		}
-		return nil
+			return nil
+		})
+		return err
 	})
 	if err != nil {
 		return fmt.Errorf("reconcile PersistentVolumeClaim %s: %w", name, err)
@@ -143,21 +147,24 @@ func (r *AgentReconciler) reconcileClaim(ctx context.Context, agent *polisv1alph
 
 func (r *AgentReconciler) reconcileDeployment(ctx context.Context, agent *polisv1alpha1.Agent, templateNames, claimNames []string) error {
 	name := "polis-agent-" + agent.Name
-	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: agent.Namespace}}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deployment, func() error {
-		template, err := r.podTemplate(agent, templateNames, claimNames)
-		if err != nil {
-			return err
-		}
-		labels := agentLabels(agent.Name)
-		deployment.Labels = mergeStringMaps(deployment.Labels, labels)
-		deployment.Spec = appsv1.DeploymentSpec{
-			Replicas: ptr.To[int32](1),
-			Strategy: appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType},
-			Selector: &metav1.LabelSelector{MatchLabels: labels},
-			Template: template,
-		}
-		return controllerutil.SetControllerReference(agent, deployment, r.Scheme)
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: agent.Namespace}}
+		_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deployment, func() error {
+			template, err := r.podTemplate(agent, templateNames, claimNames)
+			if err != nil {
+				return err
+			}
+			labels := agentLabels(agent.Name)
+			deployment.Labels = mergeStringMaps(deployment.Labels, labels)
+			deployment.Spec = appsv1.DeploymentSpec{
+				Replicas: ptr.To[int32](1),
+				Strategy: appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType},
+				Selector: &metav1.LabelSelector{MatchLabels: labels},
+				Template: template,
+			}
+			return controllerutil.SetControllerReference(agent, deployment, r.Scheme)
+		})
+		return err
 	})
 	if err != nil {
 		return fmt.Errorf("reconcile Deployment %s: %w", name, err)
