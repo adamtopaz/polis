@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/adamtopaz/polis/internal/client"
 )
@@ -34,7 +33,7 @@ func run(ctx context.Context, args []string) error {
 		return nil
 	}
 	switch args[0] {
-	case "inspect", "messages", "ack", "send", "schedule", "journal":
+	case "inspect", "messages", "ack", "send", "journal":
 	default:
 		return usageError()
 	}
@@ -74,23 +73,6 @@ func run(ctx context.Context, args []string) error {
 			return err
 		}
 		message, err := api.SendMessage(ctx, token, positional[0], body)
-		return printJSON(message, err)
-	case "schedule":
-		if len(positional) != 2 {
-			return errors.New("schedule requires a delay and a JSON body")
-		}
-		delay, err := time.ParseDuration(positional[0])
-		if err != nil {
-			return fmt.Errorf("parse schedule delay: %w", err)
-		}
-		if delay < time.Second {
-			return errors.New("schedule delay must be at least 1s")
-		}
-		body, err := rawJSON(positional[1])
-		if err != nil {
-			return err
-		}
-		message, err := api.ScheduleMessage(ctx, token, delay, body)
 		return printJSON(message, err)
 	case "journal":
 		if len(positional) != 2 {
@@ -157,7 +139,6 @@ Usage:
   polis messages
   polis ack MESSAGE_ID
   polis send AGENT_ID JSON
-  polis schedule DELAY JSON
   polis journal KIND JSON
 `
 }

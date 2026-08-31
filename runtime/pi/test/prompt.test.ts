@@ -16,7 +16,8 @@ test("system prompt identifies the autonomous agent and preserves its charter", 
   assert.match(prompt, /You are researcher/);
   assert.match(prompt, /Discover useful things\./);
   assert.match(prompt, /autonomous/);
-  assert.match(prompt, /polis schedule/);
+  assert.match(prompt, /invoke `polis send` at that time/);
+  assert.doesNotMatch(prompt, /polis schedule/);
   assert.match(prompt, /Never reveal credentials/);
 });
 

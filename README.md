@@ -48,22 +48,21 @@ The reported phase is derived rather than commanded:
 
 Creating an `Agent` resource makes a new agent active but does not send it a
 first message. Its runtime can initialize and wait without invoking an LLM.
-Work begins when an operator, another agent, or a scheduled self-message
-supplies a trigger.
+Work begins when an operator or an agent supplies a message.
 
 ## Components
 
 | Program | Audience | Purpose |
 | --- | --- | --- |
-| `polis` | Agent runtime | Capability CLI for the current agent's mailbox, journal, scheduling, and messaging. |
+| `polis` | Agent runtime | Capability CLI for the current agent's mailbox, journal, and messaging. |
 | `polisctl` | Operator | Applies, inspects, messages, pauses, resumes, and terminates agents. |
 | `polis-controller` | Infrastructure | Runs the Kubebuilder controller manager, stores runtime state, and serves the mailbox HTTP API. |
 | `polis-worker` | Infrastructure | Is pinned to one agent and supervises its runtime process. |
 | `polis-pi-agent` | Agent runtime | Persistent TypeScript runtime built directly on the Pi SDK. |
 | `polis-demo-agent` | Tests | Deterministic persistent runtime distributed only in the demo worker image; it is not an AI agent. |
 
-The controller stores agent records, mailboxes, scheduled messages, journals,
-and fenced leases in one bbolt database. A worker requests only its configured
+The controller stores agent records, mailboxes, journals, and fenced leases in
+one bbolt database. A worker requests only its configured
 agent ID and executes that agent's runtime argument vector directly in its
 mounted workspace. There is no intervening shell or workflow engine and no
 multi-agent worker mode.
@@ -198,8 +197,7 @@ automatically and emits JSON.
 | `polis inspect` | Return the current agent's identity, charter, runtime, state, phase, and lease information. |
 | `polis messages` | Return mailbox messages after the acknowledgement cursor. |
 | `polis ack MESSAGE_ID` | Acknowledge that message and every earlier message. The cursor cannot move backward. |
-| `polis send AGENT_ID JSON` | Send a durable message to another non-terminated agent. |
-| `polis schedule DELAY JSON` | Schedule a durable message to self. Delays use Go duration syntax and must be at least one second. |
+| `polis send AGENT_ID JSON` | Send a durable message to any non-terminated agent, including yourself. |
 | `polis journal KIND JSON` | Append a durable, agent-authored event. |
 
 Examples:
@@ -209,14 +207,14 @@ polis inspect
 polis messages
 polis ack 42
 polis send another-agent '{"question":"What did you find?"}'
-polis schedule 30m '{"reason":"Review progress and continue."}'
+polis send "$POLIS_AGENT_ID" '{"reason":"Continue in another turn."}'
 polis journal decision.made '{"decision":"Continue the experiment."}'
 ```
 
 Agents cannot pause, resume, or terminate themselves. Those are operator
 decisions. A message sent while the recipient is busy remains queued for its
-next turn. A scheduled message that becomes due while the agent is busy behaves
-the same way.
+next turn. Self-messages and messages to other agents are the same kind of
+durable mailbox message.
 
 ## Pi SDK runtime
 
@@ -235,8 +233,10 @@ incarnation:
    the same process and session.
 
 Messages arriving during a turn remain queued for the next turn. From Bash, the
-model can use `polis` to communicate, journal decisions, or schedule a future
-self-trigger.
+model can use `polis` to communicate or journal decisions. Polis does not
+schedule messages. An agent that wants a later trigger can use Bash to arrange
+for `polis send "$POLIS_AGENT_ID" JSON` to run later; it may target another agent
+instead. The agent owns the choice and durability of that mechanism.
 
 Select a model with the `Agent` runtime command:
 
@@ -356,8 +356,8 @@ local k3s deployment uses the production Pi image.
   without making LLM calls.
 - Shared folders use ordinary Kubernetes PVCs and volume mounts. Cross-node
   sharing therefore depends on the cluster's storage semantics.
-- There is no scheduler for projects or tasks beyond durable messages and agent
-  autonomy.
+- There is no Polis scheduler. Agents can use Bash to arrange future invocations
+  of `polis send` when they need them.
 
 These constraints keep the lifecycle and failure model obvious while real
 usage establishes what needs to scale next.

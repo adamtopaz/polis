@@ -51,7 +51,6 @@ func TestAgentCommands(t *testing.T) {
 		{"ack", strconv.FormatUint(message.ID, 10)},
 		{"journal", "cli.tested", `{"ok":true}`},
 		{"send", "y-target", `{"hello":"target"}`},
-		{"schedule", "1h", `{"reason":"continue"}`},
 	}
 	for _, command := range commands {
 		if err := run(ctx, command); err != nil {
@@ -109,6 +108,7 @@ func TestAgentCLIRejectsNonAgentCommands(t *testing.T) {
 		{"demo-agent"},
 		{"self", "inspect"},
 		{"spawn"},
+		{"schedule", "1h", `{}`},
 	} {
 		err := run(context.Background(), command)
 		if err == nil || !strings.Contains(err.Error(), "capability CLI") {

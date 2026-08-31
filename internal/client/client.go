@@ -143,14 +143,6 @@ func (c *Client) Journal(ctx context.Context, token, kind string, data json.RawM
 	return event, err
 }
 
-func (c *Client) ScheduleMessage(ctx context.Context, token string, delay time.Duration, body json.RawMessage) (model.ScheduledMessage, error) {
-	var message model.ScheduledMessage
-	err := c.do(ctx, http.MethodPost, "/v1/self/schedule", token, map[string]any{
-		"after_seconds": int64(delay / time.Second), "body": body,
-	}, &message)
-	return message, err
-}
-
 func (c *Client) do(ctx context.Context, method, path, token string, input, output any) error {
 	_, err := c.doStatus(ctx, method, path, token, input, output)
 	return err

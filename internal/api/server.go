@@ -42,7 +42,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/self/messages", s.selfMessages)
 	mux.HandleFunc("POST /v1/self/messages", s.sendSelfMessage)
 	mux.HandleFunc("POST /v1/self/messages/ack", s.ackMessages)
-	mux.HandleFunc("POST /v1/self/schedule", s.scheduleSelfMessage)
 	mux.HandleFunc("POST /v1/self/journal", s.journal)
 	return s.recoverAndLog(mux)
 }
@@ -239,24 +238,6 @@ func (s *Server) ackMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	err := s.store.AckMessages(bearer(r), request.Through)
 	respond(w, http.StatusOK, map[string]bool{"ok": true}, err)
-}
-
-func (s *Server) scheduleSelfMessage(w http.ResponseWriter, r *http.Request) {
-	var request struct {
-		AfterSeconds int64           `json:"after_seconds"`
-		Body         json.RawMessage `json:"body"`
-	}
-	if !decode(w, r, &request) {
-		return
-	}
-	const maxScheduleSeconds = int64(100 * 365 * 24 * 60 * 60)
-	if request.AfterSeconds < 1 || request.AfterSeconds > maxScheduleSeconds {
-		writeError(w, errors.New("after_seconds must be between 1 and 3153600000"))
-		return
-	}
-	deliverAt := time.Now().UTC().Add(time.Duration(request.AfterSeconds) * time.Second)
-	message, err := s.store.ScheduleMessage(bearer(r), deliverAt, request.Body)
-	respond(w, http.StatusCreated, message, err)
 }
 
 func (s *Server) journal(w http.ResponseWriter, r *http.Request) {

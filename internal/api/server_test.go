@@ -116,14 +116,15 @@ func TestHTTPAgentLifecycle(t *testing.T) {
 	if _, err := api.Journal(ctx, lease.Token, "test.observed", json.RawMessage(`{"ok":true}`)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.New(server.URL).ScheduleMessage(ctx, lease.Token, time.Second, json.RawMessage(`{"reason":"scheduled wake"}`)); err != nil {
+	message, err := client.New(server.URL).SendMessage(ctx, lease.Token, "http-agent", json.RawMessage(`{"reason":"self message"}`))
+	if err != nil {
 		t.Fatal(err)
 	}
-	messages, err := client.New(server.URL).WaitMessages(ctx, lease.Token, 3*time.Second)
-	if err != nil || len(messages) != 1 || messages[0].Sender != "agent:http-agent" {
-		t.Fatalf("scheduled messages = %#v, %v", messages, err)
+	messages, err := client.New(server.URL).WaitMessages(ctx, lease.Token, time.Second)
+	if err != nil || len(messages) != 1 || messages[0].ID != message.ID || messages[0].Sender != "agent:http-agent" {
+		t.Fatalf("self messages = %#v, %v", messages, err)
 	}
-	for _, path := range []string{"/v1/self/sleep", "/v1/self/terminate", "/v1/self/spawn"} {
+	for _, path := range []string{"/v1/self/sleep", "/v1/self/terminate", "/v1/self/spawn", "/v1/self/schedule"} {
 		request, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+path, nil)
 		if err != nil {
 			t.Fatal(err)
