@@ -9,11 +9,13 @@ import {
   ModelRuntime,
   resolveCliModel,
   SessionManager,
+  SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { loadConfig } from "./config.js";
 import { PolisApiError, PolisClient } from "./polis.js";
 import { polisSystemPrompt, polisTurnPrompt } from "./prompt.js";
 import { withMailboxRetry } from "./retry.js";
+import { applyCompactionOverrides } from "./settings.js";
 
 let stopping = false;
 let abortActiveSession: (() => Promise<void>) | undefined;
@@ -67,13 +69,17 @@ async function main(): Promise<void> {
     log("model.warning", { message: selected.warning });
   }
   const thinkingLevel = config.thinking ?? selected?.thinkingLevel;
+  const settingsManager = SettingsManager.create(config.workspace, config.agentDir);
 
   const resourceLoader = new DefaultResourceLoader({
     cwd: config.workspace,
     agentDir: config.agentDir,
+    settingsManager,
     appendSystemPromptOverride: (base) => [...base, polisSystemPrompt(agent, charter)],
   });
   await resourceLoader.reload();
+  // Resource reload refreshes file-backed settings; runtime arguments are the final overrides.
+  const compaction = applyCompactionOverrides(settingsManager, config);
 
   const sessionManager = SessionManager.continueRecent(config.workspace, config.sessionDir);
   const { session } = await createAgentSession({
@@ -81,6 +87,7 @@ async function main(): Promise<void> {
     agentDir: config.agentDir,
     modelRuntime,
     sessionManager,
+    settingsManager,
     resourceLoader,
     tools: ["read", "bash", "edit", "write", "grep", "find", "ls"],
     ...(selected?.model === undefined ? {} : { model: selected.model }),
@@ -102,6 +109,9 @@ async function main(): Promise<void> {
       session: session.sessionId,
       model: `${session.model?.provider ?? "unknown"}/${session.model?.id ?? "unknown"}`,
       thinking: session.thinkingLevel,
+      compaction_enabled: compaction.enabled,
+      compaction_reserve_tokens: compaction.reserveTokens,
+      compaction_keep_recent_tokens: compaction.keepRecentTokens,
     });
     log("runtime.waiting", { agent: agent.id });
     while (!stopping) {

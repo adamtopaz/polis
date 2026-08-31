@@ -31,10 +31,15 @@ test("runtime flags override the environment model and select thinking", () => {
     "--model",
     "openai-codex/gpt-5.5",
     "--thinking=high",
+    "--compaction-reserve-tokens",
+    "32768",
+    "--compaction-keep-recent-tokens=24000",
   ]);
 
   assert.equal(config.model, "openai-codex/gpt-5.5");
   assert.equal(config.thinking, "high");
+  assert.equal(config.compactionReserveTokens, 32768);
+  assert.equal(config.compactionKeepRecentTokens, 24000);
 });
 
 test("thinking can be selected without overriding the restored model", () => {
@@ -59,6 +64,14 @@ test("runtime flags reject missing, invalid, and unknown values", () => {
 
   assert.throws(() => loadConfig(environment, ["--model"]), /--model requires a value/);
   assert.throws(() => loadConfig(environment, ["--thinking", "enormous"]), /invalid --thinking level/);
+  assert.throws(
+    () => loadConfig(environment, ["--compaction-reserve-tokens", "0"]),
+    /--compaction-reserve-tokens must be a positive integer/,
+  );
+  assert.throws(
+    () => loadConfig(environment, ["--compaction-keep-recent-tokens=12.5"]),
+    /--compaction-keep-recent-tokens must be a positive integer/,
+  );
   assert.throws(() => loadConfig(environment, ["--provider", "openai"]), /unknown argument/);
 });
 

@@ -9,6 +9,8 @@ export interface Config {
   sessionDir: string;
   model?: string;
   thinking?: ThinkingLevel;
+  compactionReserveTokens?: number;
+  compactionKeepRecentTokens?: number;
   authFile?: string;
 }
 
@@ -18,6 +20,8 @@ export type ThinkingLevel = typeof thinkingLevels[number];
 interface RuntimeArgs {
   model?: string;
   thinking?: ThinkingLevel;
+  compactionReserveTokens?: number;
+  compactionKeepRecentTokens?: number;
 }
 
 export function loadConfig(
@@ -41,6 +45,12 @@ export function loadConfig(
     sessionDir: path.join(workspace, ".polis", "pi-sessions"),
     ...(model === undefined ? {} : { model }),
     ...(runtime.thinking === undefined ? {} : { thinking: runtime.thinking }),
+    ...(runtime.compactionReserveTokens === undefined
+      ? {}
+      : { compactionReserveTokens: runtime.compactionReserveTokens }),
+    ...(runtime.compactionKeepRecentTokens === undefined
+      ? {}
+      : { compactionKeepRecentTokens: runtime.compactionKeepRecentTokens }),
     ...(authFile === undefined ? {} : { authFile: path.resolve(authFile) }),
   };
 }
@@ -48,6 +58,8 @@ export function loadConfig(
 function parseRuntimeArgs(args: readonly string[]): RuntimeArgs {
   let model: string | undefined;
   let thinking: ThinkingLevel | undefined;
+  let compactionReserveTokens: number | undefined;
+  let compactionKeepRecentTokens: number | undefined;
 
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
@@ -61,6 +73,28 @@ function parseRuntimeArgs(args: readonly string[]): RuntimeArgs {
       index += 1;
     } else if (argument?.startsWith("--thinking=")) {
       thinking = parseThinking(flagValue("--thinking", argument.slice("--thinking=".length)));
+    } else if (argument === "--compaction-reserve-tokens") {
+      compactionReserveTokens = parsePositiveInteger(
+        "--compaction-reserve-tokens",
+        flagValue("--compaction-reserve-tokens", args[index + 1]),
+      );
+      index += 1;
+    } else if (argument?.startsWith("--compaction-reserve-tokens=")) {
+      compactionReserveTokens = parsePositiveInteger(
+        "--compaction-reserve-tokens",
+        flagValue("--compaction-reserve-tokens", argument.slice("--compaction-reserve-tokens=".length)),
+      );
+    } else if (argument === "--compaction-keep-recent-tokens") {
+      compactionKeepRecentTokens = parsePositiveInteger(
+        "--compaction-keep-recent-tokens",
+        flagValue("--compaction-keep-recent-tokens", args[index + 1]),
+      );
+      index += 1;
+    } else if (argument?.startsWith("--compaction-keep-recent-tokens=")) {
+      compactionKeepRecentTokens = parsePositiveInteger(
+        "--compaction-keep-recent-tokens",
+        flagValue("--compaction-keep-recent-tokens", argument.slice("--compaction-keep-recent-tokens=".length)),
+      );
     } else {
       throw new Error(`unknown argument ${JSON.stringify(argument)}`);
     }
@@ -69,6 +103,8 @@ function parseRuntimeArgs(args: readonly string[]): RuntimeArgs {
   return {
     ...(model === undefined ? {} : { model }),
     ...(thinking === undefined ? {} : { thinking }),
+    ...(compactionReserveTokens === undefined ? {} : { compactionReserveTokens }),
+    ...(compactionKeepRecentTokens === undefined ? {} : { compactionKeepRecentTokens }),
   };
 }
 
@@ -85,6 +121,14 @@ function parseThinking(value: string): ThinkingLevel {
     return value as ThinkingLevel;
   }
   throw new Error(`invalid --thinking level ${JSON.stringify(value)}; expected ${thinkingLevels.join(", ")}`);
+}
+
+function parsePositiveInteger(flag: string, value: string): number {
+  const parsed = Number(value);
+  if (Number.isSafeInteger(parsed) && parsed > 0) {
+    return parsed;
+  }
+  throw new Error(`${flag} must be a positive integer`);
 }
 
 function required(environment: NodeJS.ProcessEnv, name: string): string {

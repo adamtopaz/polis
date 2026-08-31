@@ -112,6 +112,10 @@ spec:
       - openai-codex/gpt-5.5
       - --thinking
       - high
+      - --compaction-reserve-tokens
+      - "32768"
+      - --compaction-keep-recent-tokens
+      - "24000"
   volumeClaimTemplates:
     - metadata:
         name: workspace
@@ -255,12 +259,24 @@ spec:
       - provider/model
       - --thinking
       - high
+      - --compaction-reserve-tokens
+      - "32768"
+      - --compaction-keep-recent-tokens
+      - "24000"
 ```
 
 `--thinking` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or
 `max`, subject to the selected model. Runtime arguments override
 `POLIS_PI_MODEL`, which accepts Pi's `provider/model[:thinking]` syntax. If no
 model is specified, Pi restores the session model or selects an available one.
+
+Automatic context compaction remains enabled. `--compaction-reserve-tokens`
+controls how much of the model's context window Pi reserves before triggering
+compaction; Pi's default is `16384`. `--compaction-keep-recent-tokens` controls
+how much recent conversation Pi retains verbatim beside the summary; Pi's
+default is `20000`. Both flags require positive integers. When omitted, Polis
+preserves Pi's configured values or defaults. Compaction entries are stored in
+the durable Pi session on the agent's workspace PVC.
 
 Provider API-key variables may be inherited by the runtime. Alternatively,
 `POLIS_PI_AUTH_FILE` may point to an existing Pi `auth.json`; the runtime copies
