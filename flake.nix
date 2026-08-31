@@ -141,7 +141,7 @@
                 ];
                 Env = [
                   "PATH=/bin"
-                  "POLIS_WORKSPACE_ROOT=/workspaces"
+                  "POLIS_WORKSPACE=/workspace"
                   "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
                 ]
                 ++ extraEnv;

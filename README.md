@@ -18,16 +18,16 @@ understandable consistency model over premature scale machinery.
 
 ## The lifecycle model
 
-An agent is a persistent logical identity, not an immortal Unix process. A
-worker runs one incarnation of that identity at a time. If the process, worker,
-or node disappears, another incarnation resumes with the same identity,
-workspace, mailbox, and runtime configuration.
+An agent is a persistent logical identity, not an immortal Unix process. One
+dedicated worker supervises one incarnation of one declared agent. If the
+process, pod, or node disappears, the dedicated pod resumes the same identity,
+workspace, mailbox, and runtime configuration from its PVC.
 
 Desired state belongs to the operator:
 
 | State | Meaning |
 | --- | --- |
-| `active` | Polis maintains a running incarnation whenever capacity is available. |
+| `active` | The agent's dedicated worker maintains a running incarnation. |
 | `paused` | No incarnation runs; identity, workspace, mailbox, and history remain. |
 | `terminated` | The agent is permanently stopped and cannot be restarted or messaged. |
 
@@ -35,31 +35,33 @@ The reported phase is derived rather than commanded:
 
 | Phase | Meaning |
 | --- | --- |
-| `ready` | Active and waiting for a worker slot. |
+| `ready` | Active and waiting for its dedicated worker to acquire it. |
 | `running` | A worker owns a live incarnation lease. |
 | `backoff` | Active, but waiting briefly after an incarnation exited. |
 | `paused` | Desired state is paused. |
 | `terminated` | Desired state is terminated. |
 
-Creating an agent makes it active but does not send it a first message. Its
-runtime can initialize and wait without invoking an LLM. Work begins when an
-operator, another agent, or a scheduled self-message supplies a trigger.
+Applying an agent configuration makes a new agent active but does not send it a
+first message. Its runtime can initialize and wait without invoking an LLM.
+Work begins when an operator, another agent, or a scheduled self-message
+supplies a trigger.
 
 ## Components
 
 | Program | Audience | Purpose |
 | --- | --- | --- |
-| `polis` | Agent runtime | Capability CLI for the current agent's mailbox, journal, scheduling, messaging, and spawning. |
-| `polisctl` | Operator | Creates, inspects, messages, pauses, resumes, and terminates agents. |
+| `polis` | Agent runtime | Capability CLI for the current agent's mailbox, journal, scheduling, and messaging. |
+| `polisctl` | Operator | Applies, inspects, messages, pauses, resumes, and terminates agents. |
 | `polis-controller` | Infrastructure | Stores state and serves the HTTP API. |
-| `polis-worker` | Infrastructure | Leases active agents and supervises their runtime processes. |
+| `polis-worker` | Infrastructure | Is pinned to one agent and supervises its runtime process. |
 | `polis-pi-agent` | Agent runtime | Persistent TypeScript runtime built directly on the Pi SDK. |
 | `polis-demo-agent` | Tests | Deterministic persistent runtime distributed only in the demo worker image; it is not an AI agent. |
 
 The controller stores agent records, mailboxes, scheduled messages, journals,
-and fenced leases in one bbolt database. Workers lease ready agents and execute
-their runtime argument vector directly in
-`<workspace-root>/<agent-id>`. There is no intervening shell or workflow engine.
+and fenced leases in one bbolt database. A worker requests only its configured
+agent ID and executes that agent's runtime argument vector directly in its
+mounted workspace. There is no intervening shell or workflow engine and no
+multi-agent worker mode.
 
 Each runtime receives:
 
@@ -83,18 +85,20 @@ cannot continue alongside its replacement.
 `POLIS_OPERATOR_TOKEN_FILE`, or from `POLIS_OPERATOR_TOKEN` for local
 development. Every command emits JSON.
 
-Create a Pi agent:
+Apply a stable Pi agent configuration:
 
 ```console
-polisctl agent create \
+polisctl agent apply \
   --id researcher \
   --charter 'Investigate your assigned subject autonomously and preserve useful findings.' \
   --runtime '["polis-pi-agent","--model","openai-codex/gpt-5.5","--thinking","high"]'
 ```
 
-The ID is generated when `--id` is omitted. The charter and runtime are stable
-configuration. Creation starts the persistent runtime but intentionally does
-not create a mailbox trigger.
+`agent apply` requires a stable ID. It creates the logical record if absent and
+idempotently updates its charter and runtime if present without changing its
+desired state. Kubernetes topology remains responsible for providing the
+matching dedicated pod and PVC. Applying configuration intentionally does not
+create a mailbox trigger.
 
 Send the first trigger and inspect progress:
 
@@ -116,7 +120,7 @@ The full operator surface is:
 
 | Command | Effect |
 | --- | --- |
-| `polisctl agent create --charter TEXT --runtime JSON [--id ID]` | Create an active agent. `--runtime` is a JSON array containing an executable and its arguments. |
+| `polisctl agent apply --id ID --charter TEXT --runtime JSON` | Idempotently create or update a declaratively managed agent. |
 | `polisctl agent list` | List all agents. |
 | `polisctl agent get ID` | Return one agent's configuration, desired state, phase, and current lease information. |
 | `polisctl agent state ID active\|paused\|terminated` | Change desired state. Termination is irreversible. |
@@ -138,7 +142,6 @@ automatically and emits JSON.
 | `polis ack MESSAGE_ID` | Acknowledge that message and every earlier message. The cursor cannot move backward. |
 | `polis send AGENT_ID JSON` | Send a durable message to another non-terminated agent. |
 | `polis schedule DELAY JSON` | Schedule a durable message to self. Delays use Go duration syntax and must be at least one second. |
-| `polis spawn --charter TEXT --runtime JSON [--id ID]` | Create another active agent. It receives no initial trigger. |
 | `polis journal KIND JSON` | Append a durable, agent-authored event. |
 
 Examples:
@@ -149,7 +152,6 @@ polis messages
 polis ack 42
 polis send another-agent '{"question":"What did you find?"}'
 polis schedule 30m '{"reason":"Review progress and continue."}'
-polis spawn --charter 'Investigate independently.' --runtime '["agent-runtime"]'
 polis journal decision.made '{"decision":"Continue the experiment."}'
 ```
 
@@ -175,13 +177,13 @@ incarnation:
    the same process and session.
 
 Messages arriving during a turn remain queued for the next turn. From Bash, the
-model can use `polis` to communicate, journal decisions, spawn agents, or
-schedule a future self-trigger.
+model can use `polis` to communicate, journal decisions, or schedule a future
+self-trigger.
 
 Select a model with runtime arguments:
 
 ```console
-polisctl agent create \
+polisctl agent apply --id agent-id \
   --charter 'Pursue this work carefully and autonomously.' \
   --runtime '["polis-pi-agent","--model","provider/model","--thinking","high"]'
 ```
@@ -225,12 +227,13 @@ Polis currently uses three deliberately small bearer-token boundaries:
 | Credential | Held by | Capability |
 | --- | --- | --- |
 | Operator token | `polisctl` and controller | Fleet administration and event inspection. |
-| Worker token | Controller and workers | Acquire a ready agent lease. |
+| Worker token | Controller and dedicated workers | Acquire the worker's declared agent lease. |
 | Incarnation token | One worker and its runtime | Act only as the leased agent while that lease is valid. |
 
 The worker can consume its credential from a temporary file before starting
-agent runtimes. Operator and worker token variables are removed from the child
-environment. The controller image contains `polisctl`; both worker images
+its agent runtime. Operator, worker, and supervisor identity variables are
+removed from the child environment and replaced with the leased incarnation's
+values. The controller image contains `polisctl`; both worker images
 contain the agent-facing `polis` but deliberately omit `polisctl`. The
 production Pi image contains no demo runtime code.
 
@@ -277,7 +280,7 @@ POLIS_OPERATOR_TOKEN=dev-operator POLIS_WORKER_TOKEN=dev-worker \
 
 ```console
 POLIS_WORKER_TOKEN=dev-worker \
-  nix run .#worker -- --workspace-root ./workspaces
+  nix run .#worker -- --agent researcher --workspace ./researcher-workspace
 ```
 
 Then use `POLIS_OPERATOR_TOKEN=dev-operator nix run .#polisctl -- ...` from a
@@ -285,21 +288,18 @@ third terminal. Any configured runtime executable must be available in the
 worker's environment. The companion local deployment repository provides the
 tested k3s workflow and a worker image with the Pi runtime already installed.
 
-The Pi and demo worker images are intentionally separate. The current
-controller does not route leases by runtime availability, so do not mix
-incompatible worker images in one pool: every worker in a pool must contain the
-executables configured for the agents it may acquire. The local k3s deployment
-uses only the production Pi image.
+The Pi and demo worker images are intentionally separate. Each dedicated worker
+image must contain the runtime executable configured for its one agent. The
+local k3s deployment uses the production Pi image.
 
 ## Deliberate limits
 
 - The controller is one bbolt writer, not a highly available replicated
   service.
-- Every active persistent agent occupies a worker slot, even while waiting
-  without making LLM calls. Capacity scales by adding workers or slots; paused
-  agents use none.
-- Workspaces are filesystem directories. Cross-node movement therefore depends
-  on the cluster's storage semantics.
+- Every declared agent has its own pod and private PVC, even while waiting
+  without making LLM calls.
+- Shared folders use ordinary Kubernetes PVCs and volume mounts. Cross-node
+  sharing therefore depends on the cluster's storage semantics.
 - There is no scheduler for projects or tasks beyond durable messages and agent
   autonomy.
 

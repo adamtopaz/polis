@@ -60,14 +60,27 @@ func TestHTTPAgentLifecycle(t *testing.T) {
 	if healthResponse.StatusCode != http.StatusOK {
 		t.Fatalf("health status = %d", healthResponse.StatusCode)
 	}
-	agent, err := api.CreateAgent(ctx, "http-agent", "Act autonomously.", []string{"runtime"})
+	removedCreateRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/v1/agents", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removedCreateRequest.Header.Set("Authorization", "Bearer operator-secret")
+	removedCreateResponse, err := http.DefaultClient.Do(removedCreateRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removedCreateResponse.Body.Close()
+	if removedCreateResponse.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("removed create route returned %d", removedCreateResponse.StatusCode)
+	}
+	agent, err := api.ApplyAgent(ctx, "http-agent", "Act autonomously.", []string{"runtime"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if agent.Phase != "ready" {
 		t.Fatalf("created agent phase = %q", agent.Phase)
 	}
-	if _, _, err := client.New(server.URL).Acquire(ctx, "test-worker", 30*time.Second, 0); err == nil {
+	if _, _, err := client.New(server.URL).Acquire(ctx, "http-agent", "test-worker", 30*time.Second, 0); err == nil {
 		t.Fatal("worker acquire accepted no token")
 	} else {
 		var apiError *client.Error
@@ -75,11 +88,11 @@ func TestHTTPAgentLifecycle(t *testing.T) {
 			t.Fatalf("unauthorized worker acquire returned %T %v", err, err)
 		}
 	}
-	if _, _, err := client.NewWorker(server.URL, "wrong-secret").Acquire(ctx, "test-worker", 30*time.Second, 0); err == nil {
+	if _, _, err := client.NewWorker(server.URL, "wrong-secret").Acquire(ctx, "http-agent", "test-worker", 30*time.Second, 0); err == nil {
 		t.Fatal("worker acquire accepted the wrong token")
 	}
 	workerAPI := client.NewWorker(server.URL, "worker-secret")
-	lease, ok, err := workerAPI.Acquire(ctx, "test-worker", 30*time.Second, 0)
+	lease, ok, err := workerAPI.Acquire(ctx, "http-agent", "test-worker", 30*time.Second, 0)
 	if err != nil || !ok {
 		t.Fatalf("acquire = %#v, %v, %v", lease, ok, err)
 	}
@@ -97,7 +110,7 @@ func TestHTTPAgentLifecycle(t *testing.T) {
 	if err != nil || len(messages) != 1 || messages[0].Sender != "agent:http-agent" {
 		t.Fatalf("scheduled messages = %#v, %v", messages, err)
 	}
-	for _, path := range []string{"/v1/self/sleep", "/v1/self/terminate"} {
+	for _, path := range []string{"/v1/self/sleep", "/v1/self/terminate", "/v1/self/spawn"} {
 		request, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+path, nil)
 		if err != nil {
 			t.Fatal(err)

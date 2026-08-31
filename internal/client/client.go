@@ -46,9 +46,9 @@ func NewWorker(baseURL, token string) *Client {
 	return client
 }
 
-func (c *Client) CreateAgent(ctx context.Context, id, charter string, runtime []string) (model.Agent, error) {
+func (c *Client) ApplyAgent(ctx context.Context, id, charter string, runtime []string) (model.Agent, error) {
 	var agent model.Agent
-	err := c.do(ctx, http.MethodPost, "/v1/agents", c.operatorToken, map[string]any{"id": id, "charter": charter, "runtime": runtime}, &agent)
+	err := c.do(ctx, http.MethodPut, "/v1/agents/"+id, c.operatorToken, map[string]any{"charter": charter, "runtime": runtime}, &agent)
 	return agent, err
 }
 
@@ -90,10 +90,10 @@ func (c *Client) Events(ctx context.Context, id string) ([]model.Event, error) {
 	return response.Items, err
 }
 
-func (c *Client) Acquire(ctx context.Context, workerID string, ttl, wait time.Duration) (model.Lease, bool, error) {
+func (c *Client) Acquire(ctx context.Context, agentID, workerID string, ttl, wait time.Duration) (model.Lease, bool, error) {
 	var lease model.Lease
 	status, err := c.doStatus(ctx, http.MethodPost, "/v1/worker/acquire", c.workerToken, map[string]any{
-		"worker_id": workerID, "ttl_seconds": int64(ttl.Seconds()), "wait_seconds": int64(wait.Seconds()),
+		"agent_id": agentID, "worker_id": workerID, "ttl_seconds": int64(ttl.Seconds()), "wait_seconds": int64(wait.Seconds()),
 	}, &lease)
 	if status == http.StatusNoContent && err == nil {
 		return model.Lease{}, false, nil
@@ -141,12 +141,6 @@ func (c *Client) SendMessage(ctx context.Context, token, to string, body json.Ra
 	var message model.Message
 	err := c.do(ctx, http.MethodPost, "/v1/self/messages", token, map[string]any{"to": to, "body": body}, &message)
 	return message, err
-}
-
-func (c *Client) Spawn(ctx context.Context, token, id, charter string, runtime []string) (model.Agent, error) {
-	var agent model.Agent
-	err := c.do(ctx, http.MethodPost, "/v1/self/spawn", token, map[string]any{"id": id, "charter": charter, "runtime": runtime}, &agent)
-	return agent, err
 }
 
 func (c *Client) Journal(ctx context.Context, token, kind string, data json.RawMessage) (model.Event, error) {

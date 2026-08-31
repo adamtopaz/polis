@@ -20,7 +20,10 @@ func TestControlPlaneCredentialsAreNotPassedToAgentRuntime(t *testing.T) {
 			t.Fatalf("control-plane credential reached runtime: %#v", filtered)
 		}
 	}
-	if !slices.Contains(filtered, "PATH=/bin") || !slices.Contains(filtered, "POLIS_AGENT_ID=alpha") {
+	if !slices.Contains(filtered, "PATH=/bin") {
 		t.Fatalf("ordinary environment was removed: %#v", filtered)
+	}
+	if slices.Contains(filtered, "POLIS_AGENT_ID=alpha") {
+		t.Fatalf("supervisor identity reached runtime unchanged: %#v", filtered)
 	}
 }

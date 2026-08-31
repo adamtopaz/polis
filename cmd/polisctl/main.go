@@ -46,17 +46,20 @@ func run(ctx context.Context, args []string) error {
 
 func runAgent(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("agent requires create, list, get, or state")
+		return errors.New("agent requires apply, list, get, or state")
 	}
 	switch args[0] {
-	case "create":
-		flags := flag.NewFlagSet("agent create", flag.ContinueOnError)
+	case "apply":
+		flags := flag.NewFlagSet("agent apply", flag.ContinueOnError)
 		url := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "controller URL")
-		id := flags.String("id", "", "stable agent id (generated when omitted)")
-		charter := flags.String("charter", "", "agent charter")
-		runtimeJSON := flags.String("runtime", "", "runtime argv as a JSON array")
+		id := flags.String("id", env("POLIS_AGENT_ID", ""), "stable agent id")
+		charter := flags.String("charter", env("POLIS_AGENT_CHARTER", ""), "agent charter")
+		runtimeJSON := flags.String("runtime", env("POLIS_AGENT_RUNTIME", ""), "runtime argv as a JSON array")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
+		}
+		if flags.NArg() != 0 {
+			return errors.New("agent apply takes only flags")
 		}
 		var runtime []string
 		if err := json.Unmarshal([]byte(*runtimeJSON), &runtime); err != nil {
@@ -66,7 +69,7 @@ func runAgent(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		agent, err := api.CreateAgent(ctx, *id, *charter, runtime)
+		agent, err := api.ApplyAgent(ctx, *id, *charter, runtime)
 		return printJSON(agent, err)
 	case "list":
 		flags := flag.NewFlagSet("agent list", flag.ContinueOnError)
@@ -111,7 +114,7 @@ func runAgent(ctx context.Context, args []string) error {
 		agent, err := api.SetState(ctx, flags.Arg(0), model.State(flags.Arg(1)))
 		return printJSON(agent, err)
 	default:
-		return errors.New("agent requires create, list, get, or state")
+		return errors.New("agent requires apply, list, get, or state")
 	}
 }
 
@@ -183,7 +186,7 @@ func usage() string {
 	return `Polisctl is the operator control CLI for a Polis fleet.
 
 Usage:
-  polisctl agent create --charter TEXT --runtime '["command","arg"]' [--id ID]
+  polisctl agent apply --id ID --charter TEXT --runtime '["command","arg"]'
   polisctl agent list
   polisctl agent get ID
   polisctl agent state ID active|paused|terminated

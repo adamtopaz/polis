@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"time"
 
@@ -75,30 +76,48 @@ func Open(path string) (*Store, error) {
 
 func (s *Store) Close() error { return s.db.Close() }
 
-func (s *Store) CreateAgent(id, charter string, runtime []string, actor string) (model.Agent, error) {
+func (s *Store) ApplyAgent(id, charter string, runtime []string, actor string) (model.Agent, error) {
 	if id == "" {
-		id = "agent-" + randomHex(12)
+		return model.Agent{}, errors.New("agent id is required")
 	}
-	if !idPattern.MatchString(id) {
-		return model.Agent{}, fmt.Errorf("agent id must match %s", idPattern)
-	}
-	if charter == "" {
-		return model.Agent{}, errors.New("charter is required")
-	}
-	if len(runtime) == 0 || runtime[0] == "" {
-		return model.Agent{}, errors.New("runtime command is required")
+	if err := validateAgentConfiguration(id, charter, runtime); err != nil {
+		return model.Agent{}, err
 	}
 	now := s.now()
-	record := agentRecord{ID: id, Charter: charter, Runtime: append([]string(nil), runtime...), State: model.StateActive, CreatedAt: now, UpdatedAt: now}
+	var record agentRecord
 	err := s.db.Update(func(tx *bolt.Tx) error {
 		agents := tx.Bucket(bucketAgents)
-		if agents.Get([]byte(id)) != nil {
-			return fmt.Errorf("agent %q already exists", id)
+		value := agents.Get([]byte(id))
+		if value == nil {
+			record = agentRecord{
+				ID: id, Charter: charter, Runtime: append([]string(nil), runtime...),
+				State: model.StateActive, CreatedAt: now, UpdatedAt: now,
+			}
+			if err := putRecord(agents, id, record); err != nil {
+				return err
+			}
+			return appendEvent(tx, model.Event{
+				AgentID: id, Actor: actor, Kind: "agent.created",
+				Data: mustJSON(map[string]any{"runtime": runtime}), CreatedAt: now,
+			})
 		}
+		if err := json.Unmarshal(value, &record); err != nil {
+			return err
+		}
+		if record.Charter == charter && slices.Equal(record.Runtime, runtime) {
+			return nil
+		}
+		oldRuntime := append([]string(nil), record.Runtime...)
+		record.Charter = charter
+		record.Runtime = append([]string(nil), runtime...)
+		record.UpdatedAt = now
 		if err := putRecord(agents, id, record); err != nil {
 			return err
 		}
-		return appendEvent(tx, model.Event{AgentID: id, Actor: actor, Kind: "agent.created", Data: mustJSON(map[string]any{"runtime": runtime}), CreatedAt: now})
+		return appendEvent(tx, model.Event{
+			AgentID: id, Actor: actor, Kind: "agent.configuration_changed",
+			Data: mustJSON(map[string]any{"runtime_from": oldRuntime, "runtime_to": runtime}), CreatedAt: now,
+		})
 	})
 	return publicAgent(record, now), err
 }
@@ -156,7 +175,10 @@ func (s *Store) SetState(id string, state model.State, actor string) (model.Agen
 	return publicAgent(record, now), err
 }
 
-func (s *Store) Acquire(worker string, ttl time.Duration) (model.Lease, error) {
+func (s *Store) Acquire(agentID, worker string, ttl time.Duration) (model.Lease, error) {
+	if agentID == "" {
+		return model.Lease{}, errors.New("agent id is required")
+	}
 	if worker == "" {
 		return model.Lease{}, errors.New("worker id is required")
 	}
@@ -167,41 +189,48 @@ func (s *Store) Acquire(worker string, ttl time.Duration) (model.Lease, error) {
 	var lease model.Lease
 	err := s.db.Update(func(tx *bolt.Tx) error {
 		agents := tx.Bucket(bucketAgents)
-		cursor := agents.Cursor()
-		for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
-			var record agentRecord
-			if err := json.Unmarshal(value, &record); err != nil {
-				return err
-			}
-			if record.State != model.StateActive || (record.WakeAt != nil && record.WakeAt.After(now)) {
-				continue
-			}
-			if record.LeaseExpiresAt != nil && record.LeaseExpiresAt.After(now) {
-				continue
-			}
-			clearLease(tx, &record)
-			expires := now.Add(ttl)
-			token := randomHex(32)
-			record.LeaseOwner = worker
-			record.LeaseToken = token
-			record.LeaseExpiresAt = &expires
-			record.WakeAt = nil
-			record.UpdatedAt = now
-			if err := putRecord(agents, record.ID, record); err != nil {
-				return err
-			}
-			if err := tx.Bucket(bucketLeases).Put([]byte(token), []byte(record.ID)); err != nil {
-				return err
-			}
-			if err := appendEvent(tx, model.Event{AgentID: record.ID, Actor: "worker:" + worker, Kind: "incarnation.started", CreatedAt: now}); err != nil {
-				return err
-			}
-			lease = model.Lease{Token: token, Agent: publicAgent(record, now), ExpiresAt: expires}
-			return nil
+		var record agentRecord
+		if err := getRecord(agents, agentID, &record); err != nil {
+			return err
 		}
-		return ErrNoAgent
+		if record.State != model.StateActive || (record.WakeAt != nil && record.WakeAt.After(now)) ||
+			(record.LeaseExpiresAt != nil && record.LeaseExpiresAt.After(now)) {
+			return ErrNoAgent
+		}
+		clearLease(tx, &record)
+		expires := now.Add(ttl)
+		token := randomHex(32)
+		record.LeaseOwner = worker
+		record.LeaseToken = token
+		record.LeaseExpiresAt = &expires
+		record.WakeAt = nil
+		record.UpdatedAt = now
+		if err := putRecord(agents, record.ID, record); err != nil {
+			return err
+		}
+		if err := tx.Bucket(bucketLeases).Put([]byte(token), []byte(record.ID)); err != nil {
+			return err
+		}
+		if err := appendEvent(tx, model.Event{AgentID: record.ID, Actor: "worker:" + worker, Kind: "incarnation.started", CreatedAt: now}); err != nil {
+			return err
+		}
+		lease = model.Lease{Token: token, Agent: publicAgent(record, now), ExpiresAt: expires}
+		return nil
 	})
 	return lease, err
+}
+
+func validateAgentConfiguration(id, charter string, runtime []string) error {
+	if !idPattern.MatchString(id) {
+		return fmt.Errorf("agent id must match %s", idPattern)
+	}
+	if charter == "" {
+		return errors.New("charter is required")
+	}
+	if len(runtime) == 0 || runtime[0] == "" {
+		return errors.New("runtime command is required")
+	}
+	return nil
 }
 
 func (s *Store) Heartbeat(token string, ttl time.Duration) (model.Heartbeat, error) {
@@ -487,19 +516,6 @@ func (s *Store) Events(agentID string, limit int) ([]model.Event, error) {
 		return nil
 	})
 	return items, err
-}
-
-func (s *Store) AgentIDForToken(token string) (string, error) {
-	now := s.now()
-	var id string
-	err := s.db.View(func(tx *bolt.Tx) error {
-		record, err := recordForToken(tx, token, now)
-		if err == nil {
-			id = record.ID
-		}
-		return err
-	})
-	return id, err
 }
 
 func publicAgent(record agentRecord, now time.Time) model.Agent {

@@ -26,14 +26,14 @@ func TestAgentCommands(t *testing.T) {
 	server := httptest.NewServer(api.New(database, slog.New(slog.NewTextHandler(io.Discard, nil)), "operator-secret", "worker-secret").Handler())
 	defer server.Close()
 
-	if _, err := database.CreateAgent("parent", "Act independently.", []string{"runtime"}, "operator"); err != nil {
+	if _, err := database.ApplyAgent("parent", "Act independently.", []string{"runtime"}, "operator"); err != nil {
 		t.Fatal(err)
 	}
-	lease, err := database.Acquire("worker", 30*time.Second)
+	lease, err := database.Acquire("parent", "worker", 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.CreateAgent("y-target", "Receive messages.", []string{"runtime"}, "operator"); err != nil {
+	if _, err := database.ApplyAgent("y-target", "Receive messages.", []string{"runtime"}, "operator"); err != nil {
 		t.Fatal(err)
 	}
 	message, err := database.SendMessage("parent", "operator", json.RawMessage(`{"hello":"parent"}`))
@@ -50,7 +50,6 @@ func TestAgentCommands(t *testing.T) {
 		{"messages"},
 		{"ack", strconv.FormatUint(message.ID, 10)},
 		{"journal", "cli.tested", `{"ok":true}`},
-		{"spawn", "--id", "z-child", "--charter", "Explore.", "--runtime", `["runtime"]`},
 		{"send", "y-target", `{"hello":"target"}`},
 		{"schedule", "1h", `{"reason":"continue"}`},
 	}
@@ -60,7 +59,7 @@ func TestAgentCommands(t *testing.T) {
 		}
 	}
 
-	targetLease, err := database.Acquire("target-worker", 30*time.Second)
+	targetLease, err := database.Acquire("y-target", "target-worker", 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,11 +74,6 @@ func TestAgentCommands(t *testing.T) {
 	parent, err := database.GetAgent("parent")
 	if err != nil || parent.Phase != "running" {
 		t.Fatalf("running parent = %#v, %v", parent, err)
-	}
-
-	child, err := database.SetState("z-child", model.StateTerminated, "operator")
-	if err != nil || child.State != model.StateTerminated {
-		t.Fatalf("terminated child = %#v, %v", child, err)
 	}
 
 	events, err := database.Events("parent", 100)
@@ -114,6 +108,7 @@ func TestAgentCLIRejectsNonAgentCommands(t *testing.T) {
 		{"worker"},
 		{"demo-agent"},
 		{"self", "inspect"},
+		{"spawn"},
 	} {
 		err := run(context.Background(), command)
 		if err == nil || !strings.Contains(err.Error(), "capability CLI") {

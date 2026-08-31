@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -20,11 +19,11 @@ import (
 type Config struct {
 	ControllerURL string
 	WorkerToken   string
+	AgentID       string
 	ID            string
-	WorkspaceRoot string
+	Workspace     string
 	LeaseDuration time.Duration
 	ShutdownGrace time.Duration
-	Slots         int
 	Logger        *slog.Logger
 }
 
@@ -35,8 +34,8 @@ func Run(ctx context.Context, config Config) error {
 	if config.ID == "" {
 		return errors.New("worker id is required")
 	}
-	if config.Slots < 1 {
-		return errors.New("worker slots must be positive")
+	if config.AgentID == "" {
+		return errors.New("agent id is required")
 	}
 	if config.LeaseDuration < 5*time.Second {
 		return errors.New("lease duration must be at least 5s")
@@ -44,30 +43,20 @@ func Run(ctx context.Context, config Config) error {
 	if config.ShutdownGrace <= 0 {
 		return errors.New("shutdown grace must be positive")
 	}
-	if err := os.MkdirAll(config.WorkspaceRoot, 0o750); err != nil {
-		return fmt.Errorf("create workspace root: %w", err)
+	if config.Workspace == "" {
+		return errors.New("workspace is required")
 	}
-
-	errorsBySlot := make(chan error, config.Slots)
-	for slot := range config.Slots {
-		go func() {
-			errorsBySlot <- runSlot(ctx, config, slot)
-		}()
+	if err := os.MkdirAll(config.Workspace, 0o750); err != nil {
+		return fmt.Errorf("create workspace: %w", err)
 	}
-	for range config.Slots {
-		if err := <-errorsBySlot; err != nil && !errors.Is(err, context.Canceled) {
-			return err
-		}
-	}
-	return nil
+	return runAgent(ctx, config)
 }
 
-func runSlot(ctx context.Context, config Config, slot int) error {
+func runAgent(ctx context.Context, config Config) error {
 	api := client.NewWorker(config.ControllerURL, config.WorkerToken)
-	workerID := config.ID + "/" + strconv.Itoa(slot)
-	log := config.Logger.With("worker", workerID)
+	log := config.Logger.With("worker", config.ID, "agent", config.AgentID)
 	for ctx.Err() == nil {
-		lease, ok, err := api.Acquire(ctx, workerID, config.LeaseDuration, 20*time.Second)
+		lease, ok, err := api.Acquire(ctx, config.AgentID, config.ID, config.LeaseDuration, 20*time.Second)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -88,7 +77,7 @@ func runSlot(ctx context.Context, config Config, slot int) error {
 }
 
 func runIncarnation(parent context.Context, api *client.Client, config Config, lease model.Lease, log *slog.Logger) {
-	workspace := filepath.Join(config.WorkspaceRoot, lease.Agent.ID)
+	workspace := config.Workspace
 	metadata := filepath.Join(workspace, ".polis")
 	if err := os.MkdirAll(metadata, 0o750); err != nil {
 		reportExit(api, lease.Token, "prepare workspace: "+err.Error(), log)
@@ -171,7 +160,11 @@ func withoutControlPlaneCredentials(environment []string) []string {
 		if strings.HasPrefix(variable, "POLIS_OPERATOR_TOKEN=") ||
 			strings.HasPrefix(variable, "POLIS_OPERATOR_TOKEN_FILE=") ||
 			strings.HasPrefix(variable, "POLIS_WORKER_TOKEN=") ||
-			strings.HasPrefix(variable, "POLIS_WORKER_TOKEN_FILE=") {
+			strings.HasPrefix(variable, "POLIS_WORKER_TOKEN_FILE=") ||
+			strings.HasPrefix(variable, "POLIS_AGENT_ID=") ||
+			strings.HasPrefix(variable, "POLIS_AGENT_TOKEN=") ||
+			strings.HasPrefix(variable, "POLIS_WORKSPACE=") ||
+			strings.HasPrefix(variable, "POLIS_CHARTER_PATH=") {
 			continue
 		}
 		filtered = append(filtered, variable)

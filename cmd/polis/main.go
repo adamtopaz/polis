@@ -29,9 +29,6 @@ func run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return usageError()
 	}
-	if args[0] == "spawn" {
-		return runSpawn(ctx, args[1:])
-	}
 	if args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		fmt.Print(usage())
 		return nil
@@ -110,30 +107,6 @@ func run(ctx context.Context, args []string) error {
 	}
 }
 
-func runSpawn(ctx context.Context, args []string) error {
-	flags := flag.NewFlagSet("spawn", flag.ContinueOnError)
-	url := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "controller URL")
-	id := flags.String("id", "", "stable agent id (generated when omitted)")
-	charter := flags.String("charter", "", "agent charter")
-	runtimeJSON := flags.String("runtime", "", "runtime argv as a JSON array")
-	if err := flags.Parse(args); err != nil {
-		return err
-	}
-	if flags.NArg() != 0 {
-		return errors.New("spawn takes only flags")
-	}
-	var runtime []string
-	if err := json.Unmarshal([]byte(*runtimeJSON), &runtime); err != nil {
-		return fmt.Errorf("parse runtime: %w", err)
-	}
-	token, err := agentToken()
-	if err != nil {
-		return err
-	}
-	agent, err := client.New(*url).Spawn(ctx, token, *id, *charter, runtime)
-	return printJSON(agent, err)
-}
-
 func agentSession(name string, args []string) (*client.Client, string, []string, error) {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	url := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "controller URL")
@@ -185,7 +158,6 @@ Usage:
   polis ack MESSAGE_ID
   polis send AGENT_ID JSON
   polis schedule DELAY JSON
-  polis spawn --charter TEXT --runtime '["command","arg"]' [--id ID]
   polis journal KIND JSON
 `
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -15,13 +16,13 @@ func TestAgentLifecycle(t *testing.T) {
 	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 	st.now = func() time.Time { return now }
 
-	agent, err := st.CreateAgent("alpha", "Choose and pursue useful work.", []string{"agent-runtime"}, "operator")
+	agent, err := st.ApplyAgent("alpha", "Choose and pursue useful work.", []string{"agent-runtime"}, "operator")
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertPhase(t, agent, "ready")
 
-	lease, err := st.Acquire("worker-1", 30*time.Second)
+	lease, err := st.Acquire("alpha", "worker-1", 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,18 +91,94 @@ func TestAgentLifecycle(t *testing.T) {
 	}
 }
 
+func TestApplyAgentIsIdempotentAndUpdatesConfiguration(t *testing.T) {
+	st := openTestStore(t)
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	st.now = func() time.Time { return now }
+
+	created, err := st.ApplyAgent("alpha", "First charter.", []string{"runtime", "first"}, "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPhase(t, created, "ready")
+
+	now = now.Add(time.Minute)
+	unchanged, err := st.ApplyAgent("alpha", "First charter.", []string{"runtime", "first"}, "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !unchanged.UpdatedAt.Equal(created.UpdatedAt) {
+		t.Fatalf("idempotent apply changed updated_at: %s != %s", unchanged.UpdatedAt, created.UpdatedAt)
+	}
+
+	if _, err := st.SetState("alpha", model.StatePaused, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	updated, err := st.ApplyAgent("alpha", "Second charter.", []string{"runtime", "second"}, "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Charter != "Second charter." || !slices.Equal(updated.Runtime, []string{"runtime", "second"}) {
+		t.Fatalf("updated agent = %#v", updated)
+	}
+	if updated.State != model.StatePaused {
+		t.Fatalf("configuration apply changed desired state: %#v", updated)
+	}
+
+	events, err := st.Events("alpha", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configurationChanges := 0
+	for _, event := range events {
+		if event.Kind == "agent.configuration_changed" {
+			configurationChanges++
+		}
+	}
+	if configurationChanges != 1 {
+		t.Fatalf("configuration events = %#v", events)
+	}
+}
+
+func TestAcquireIsPinnedToAgent(t *testing.T) {
+	st := openTestStore(t)
+	if _, err := st.ApplyAgent("alpha", "Alpha.", []string{"runtime"}, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ApplyAgent("beta", "Beta.", []string{"runtime"}, "operator"); err != nil {
+		t.Fatal(err)
+	}
+
+	lease, err := st.Acquire("beta", "beta-pod", 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease.Agent.ID != "beta" {
+		t.Fatalf("pinned worker acquired %#v", lease.Agent)
+	}
+	alpha, err := st.GetAgent("alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPhase(t, alpha, "ready")
+	if _, err := st.Acquire("missing", "missing-pod", 30*time.Second); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing pinned agent returned %v", err)
+	}
+}
+
 func TestExpiredLeaseIsFencedAndReacquired(t *testing.T) {
 	st := openTestStore(t)
 	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 	st.now = func() time.Time { return now }
-	if _, err := st.CreateAgent("alpha", "Persist.", []string{"runtime"}, "operator"); err != nil {
+	if _, err := st.ApplyAgent("alpha", "Persist.", []string{"runtime"}, "operator"); err != nil {
 		t.Fatal(err)
 	}
 	message, err := st.SendMessage("alpha", "operator", json.RawMessage(`{"work":"survive"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := st.Acquire("worker-1", 5*time.Second)
+	first, err := st.Acquire("alpha", "worker-1", 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +187,7 @@ func TestExpiredLeaseIsFencedAndReacquired(t *testing.T) {
 		t.Fatalf("first delivery = %#v, %v", firstDelivery, err)
 	}
 	now = now.Add(6 * time.Second)
-	second, err := st.Acquire("worker-2", 5*time.Second)
+	second, err := st.Acquire("alpha", "worker-2", 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,14 +213,14 @@ func TestReportedExitPreservesUnreadMessages(t *testing.T) {
 	st := openTestStore(t)
 	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 	st.now = func() time.Time { return now }
-	if _, err := st.CreateAgent("alpha", "Persist.", []string{"runtime"}, "operator"); err != nil {
+	if _, err := st.ApplyAgent("alpha", "Persist.", []string{"runtime"}, "operator"); err != nil {
 		t.Fatal(err)
 	}
 	message, err := st.SendMessage("alpha", "operator", json.RawMessage(`{"work":"retry"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := st.Acquire("worker-1", 30*time.Second)
+	first, err := st.Acquire("alpha", "worker-1", 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +241,7 @@ func TestReportedExitPreservesUnreadMessages(t *testing.T) {
 	assertPhase(t, agent, "backoff")
 
 	now = now.Add(5 * time.Second)
-	second, err := st.Acquire("worker-2", 30*time.Second)
+	second, err := st.Acquire("alpha", "worker-2", 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,10 +262,10 @@ func TestReopenPreservesLeaseMailboxScheduleAndJournal(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.now = func() time.Time { return now }
-	if _, err := st.CreateAgent("alpha", "Persist.", []string{"runtime"}, "operator"); err != nil {
+	if _, err := st.ApplyAgent("alpha", "Persist.", []string{"runtime"}, "operator"); err != nil {
 		t.Fatal(err)
 	}
-	lease, err := st.Acquire("worker-1", 30*time.Second)
+	lease, err := st.Acquire("alpha", "worker-1", 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,38 +321,34 @@ func TestReopenPreservesLeaseMailboxScheduleAndJournal(t *testing.T) {
 	}
 }
 
-func TestAgentCanJournalMessageAndSpawn(t *testing.T) {
+func TestAgentCanJournalAndMessage(t *testing.T) {
 	st := openTestStore(t)
-	if _, err := st.CreateAgent("parent", "Delegate freely.", []string{"runtime"}, "operator"); err != nil {
+	if _, err := st.ApplyAgent("sender", "Coordinate freely.", []string{"runtime"}, "operator"); err != nil {
 		t.Fatal(err)
 	}
-	lease, err := st.Acquire("worker", 30*time.Second)
+	if _, err := st.ApplyAgent("target", "Receive messages.", []string{"runtime"}, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := st.Acquire("sender", "worker", 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	event, err := st.Journal(lease.Token, "decision.made", json.RawMessage(`{"decision":"spawn"}`))
+	event, err := st.Journal(lease.Token, "decision.made", json.RawMessage(`{"decision":"message"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if event.ID == 0 {
 		t.Fatal("journal event did not receive an id")
 	}
-	parentID, err := st.AgentIDForToken(lease.Token)
-	if err != nil {
+	if _, err := st.SendMessageAs(lease.Token, "target", json.RawMessage(`{"hello":"target"}`)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CreateAgent("child", "Explore independently.", []string{"runtime"}, "agent:"+parentID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.SendMessageAs(lease.Token, "child", json.RawMessage(`{"hello":"child"}`)); err != nil {
-		t.Fatal(err)
-	}
-	events, err := st.Events("parent", 100)
+	events, err := st.Events("sender", 100)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(events) < 2 {
-		t.Fatalf("parent events = %#v", events)
+		t.Fatalf("sender events = %#v", events)
 	}
 }
 

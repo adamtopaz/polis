@@ -29,7 +29,7 @@ func New(st *store.Store, logger *slog.Logger, operatorToken, workerToken string
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
-	mux.Handle("POST /v1/agents", s.requireOperator(http.HandlerFunc(s.createAgent)))
+	mux.Handle("PUT /v1/agents/{id}", s.requireOperator(http.HandlerFunc(s.applyAgent)))
 	mux.Handle("GET /v1/agents", s.requireOperator(http.HandlerFunc(s.listAgents)))
 	mux.Handle("GET /v1/agents/{id}", s.requireOperator(http.HandlerFunc(s.getAgent)))
 	mux.Handle("PUT /v1/agents/{id}/state", s.requireOperator(http.HandlerFunc(s.setState)))
@@ -44,7 +44,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/self/messages", s.sendSelfMessage)
 	mux.HandleFunc("POST /v1/self/messages/ack", s.ackMessages)
 	mux.HandleFunc("POST /v1/self/schedule", s.scheduleSelfMessage)
-	mux.HandleFunc("POST /v1/self/spawn", s.spawn)
 	mux.HandleFunc("POST /v1/self/journal", s.journal)
 	return s.recoverAndLog(mux)
 }
@@ -71,19 +70,18 @@ func requireToken(expected, role string, next http.Handler) http.Handler {
 	})
 }
 
-type createAgentRequest struct {
-	ID      string   `json:"id"`
+type agentConfigurationRequest struct {
 	Charter string   `json:"charter"`
 	Runtime []string `json:"runtime"`
 }
 
-func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
-	var request createAgentRequest
+func (s *Server) applyAgent(w http.ResponseWriter, r *http.Request) {
+	var request agentConfigurationRequest
 	if !decode(w, r, &request) {
 		return
 	}
-	agent, err := s.store.CreateAgent(request.ID, request.Charter, request.Runtime, "operator")
-	respond(w, http.StatusCreated, agent, err)
+	agent, err := s.store.ApplyAgent(r.PathValue("id"), request.Charter, request.Runtime, "operator")
+	respond(w, http.StatusOK, agent, err)
 }
 
 func (s *Server) listAgents(w http.ResponseWriter, _ *http.Request) {
@@ -134,6 +132,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) acquire(w http.ResponseWriter, r *http.Request) {
 	var request struct {
+		AgentID     string `json:"agent_id"`
 		WorkerID    string `json:"worker_id"`
 		TTLSeconds  int64  `json:"ttl_seconds"`
 		WaitSeconds int64  `json:"wait_seconds"`
@@ -149,7 +148,7 @@ func (s *Server) acquire(w http.ResponseWriter, r *http.Request) {
 	}
 	deadline := time.Now().Add(wait)
 	for {
-		lease, err := s.store.Acquire(request.WorkerID, ttl)
+		lease, err := s.store.Acquire(request.AgentID, request.WorkerID, ttl)
 		if err == nil {
 			respond(w, http.StatusOK, lease, nil)
 			return
@@ -273,20 +272,6 @@ func (s *Server) scheduleSelfMessage(w http.ResponseWriter, r *http.Request) {
 	deliverAt := time.Now().UTC().Add(time.Duration(request.AfterSeconds) * time.Second)
 	message, err := s.store.ScheduleMessage(bearer(r), deliverAt, request.Body)
 	respond(w, http.StatusCreated, message, err)
-}
-
-func (s *Server) spawn(w http.ResponseWriter, r *http.Request) {
-	parentID, err := s.store.AgentIDForToken(bearer(r))
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	var request createAgentRequest
-	if !decode(w, r, &request) {
-		return
-	}
-	agent, err := s.store.CreateAgent(request.ID, request.Charter, request.Runtime, "agent:"+parentID)
-	respond(w, http.StatusCreated, agent, err)
 }
 
 func (s *Server) journal(w http.ResponseWriter, r *http.Request) {

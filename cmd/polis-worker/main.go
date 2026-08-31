@@ -27,11 +27,11 @@ func main() {
 func run(ctx context.Context, args []string) error {
 	flags := flag.NewFlagSet("polis-worker", flag.ContinueOnError)
 	controllerURL := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "controller URL")
+	agentID := flags.String("agent", env("POLIS_AGENT_ID", ""), "agent id this worker exclusively supervises")
 	id := flags.String("id", env("POLIS_WORKER_ID", env("HOSTNAME", "worker")), "worker id")
-	workspaceRoot := flags.String("workspace-root", env("POLIS_WORKSPACE_ROOT", "./workspaces"), "durable workspace root")
+	workspace := flags.String("workspace", env("POLIS_WORKSPACE", "./workspace"), "durable agent workspace")
 	lease := flags.Duration("lease", envDuration("POLIS_LEASE_DURATION", 30*time.Second), "incarnation lease duration")
 	grace := flags.Duration("shutdown-grace", envDuration("POLIS_SHUTDOWN_GRACE", 10*time.Second), "runtime shutdown grace")
-	slots := flags.Int("slots", envInt("POLIS_SLOTS", 1), "concurrent agent processes")
 	workerTokenFile := flags.String("worker-token-file", env("POLIS_WORKER_TOKEN_FILE", ""), "consumed path to the worker token")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -52,11 +52,11 @@ func run(ctx context.Context, args []string) error {
 	return worker.Run(ctx, worker.Config{
 		ControllerURL: *controllerURL,
 		WorkerToken:   workerToken,
+		AgentID:       *agentID,
 		ID:            *id,
-		WorkspaceRoot: *workspaceRoot,
+		Workspace:     *workspace,
 		LeaseDuration: *lease,
 		ShutdownGrace: *grace,
-		Slots:         *slots,
 		Logger:        logger,
 	})
 }
@@ -75,18 +75,6 @@ func envDuration(name string, fallback time.Duration) time.Duration {
 	}
 	parsed, err := time.ParseDuration(value)
 	if err != nil {
-		return fallback
-	}
-	return parsed
-}
-
-func envInt(name string, fallback int) int {
-	value := os.Getenv(name)
-	if value == "" {
-		return fallback
-	}
-	var parsed int
-	if _, err := fmt.Sscan(value, &parsed); err != nil {
 		return fallback
 	}
 	return parsed
