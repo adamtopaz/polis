@@ -16,6 +16,7 @@ package v1alpha1
 
 import (
 	"os"
+	"slices"
 	"testing"
 
 	extensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -37,20 +38,23 @@ func TestAgentCRDPreservesEmbeddedTemplateMetadata(t *testing.T) {
 
 	root := *crd.Spec.Versions[0].Schema.OpenAPIV3Schema
 	spec := requiredProperty(t, root, "spec")
-	claims := requiredProperty(t, spec, "volumeClaimTemplates")
-	if claims.Items == nil || claims.Items.Schema == nil {
-		t.Fatal("volumeClaimTemplates does not define an item schema")
+	if !slices.Contains(spec.Required, "podTemplate") {
+		t.Fatalf("podTemplate is not required: %#v", spec.Required)
 	}
-	claimMetadata := requiredProperty(t, *claims.Items.Schema, "metadata")
-	for _, field := range []string{"name", "labels", "annotations"} {
-		requiredProperty(t, claimMetadata, field)
+	if _, found := spec.Properties["volumeClaimTemplates"]; found {
+		t.Fatal("removed volumeClaimTemplates remains in the CRD")
 	}
-
 	podTemplate := requiredProperty(t, spec, "podTemplate")
 	podMetadata := requiredProperty(t, podTemplate, "metadata")
 	for _, field := range []string{"labels", "annotations"} {
 		requiredProperty(t, podMetadata, field)
 	}
+	podSpec := requiredProperty(t, podTemplate, "spec")
+	volumes := requiredProperty(t, podSpec, "volumes")
+	if volumes.Items == nil || volumes.Items.Schema == nil {
+		t.Fatal("podTemplate volumes do not define an item schema")
+	}
+	requiredProperty(t, *volumes.Items.Schema, "persistentVolumeClaim")
 
 	messaging := requiredProperty(t, spec, "messaging")
 	allowedRecipients := requiredProperty(t, messaging, "allowedRecipients")

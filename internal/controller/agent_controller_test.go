@@ -25,7 +25,6 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -37,7 +36,7 @@ import (
 	polisv1alpha1 "github.com/adamtopaz/polis/api/v1alpha1"
 )
 
-func TestAgentReconcilerCreatesDedicatedRetainedTopology(t *testing.T) {
+func TestAgentReconcilerCreatesDedicatedTopologyFromSuppliedWorkspace(t *testing.T) {
 	scheme := testScheme(t)
 	agent := testAgent()
 	client := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&polisv1alpha1.Agent{}).WithObjects(agent).Build()
@@ -71,6 +70,9 @@ func TestAgentReconcilerCreatesDedicatedRetainedTopology(t *testing.T) {
 		envValue(container.Env, "POLIS_CHARTER") != agent.Spec.Charter || envValue(container.Env, "POLIS_URL") != "http://polis-mailbox" {
 		t.Fatalf("runtime configuration was not projected into the pod: %#v", container)
 	}
+	if got := volumeClaimName(deployment.Spec.Template.Spec.Volumes, "workspace"); got != "durable-research" {
+		t.Fatalf("workspace claim = %q, want independently named durable-research", got)
+	}
 	assertRuntimeIdentity(t, "agent", container.SecurityContext)
 	if len(deployment.Spec.Template.Spec.InitContainers) != 1 {
 		t.Fatalf("init containers = %#v", deployment.Spec.Template.Spec.InitContainers)
@@ -88,12 +90,12 @@ func TestAgentReconcilerCreatesDedicatedRetainedTopology(t *testing.T) {
 		t.Fatalf("operator credential leaked into agent Deployment: %s", encoded)
 	}
 
-	var claim corev1.PersistentVolumeClaim
-	if err := client.Get(context.Background(), types.NamespacedName{Namespace: "polis", Name: "researcher-workspace"}, &claim); err != nil {
+	var claims corev1.PersistentVolumeClaimList
+	if err := client.List(context.Background(), &claims); err != nil {
 		t.Fatal(err)
 	}
-	if len(claim.OwnerReferences) != 0 {
-		t.Fatalf("workspace would be deleted with Agent: %#v", claim.OwnerReferences)
+	if len(claims.Items) != 0 {
+		t.Fatalf("controller created or changed PVCs: %#v", claims.Items)
 	}
 
 	var reconciled polisv1alpha1.Agent
@@ -124,16 +126,36 @@ func TestAgentReconcilerRejectsMultiplePersistentContainers(t *testing.T) {
 	}
 }
 
+func TestAgentReconcilerRequiresSuppliedWorkspaceVolume(t *testing.T) {
+	scheme := testScheme(t)
+	agent := testAgent()
+	agent.Spec.PodTemplate.Spec.Volumes = slices.DeleteFunc(agent.Spec.PodTemplate.Spec.Volumes, func(volume corev1.Volume) bool {
+		return volume.Name == "workspace"
+	})
+	client := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&polisv1alpha1.Agent{}).WithObjects(agent).Build()
+	reconciler := &AgentReconciler{Client: client, Scheme: scheme}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: agent.Namespace, Name: agent.Name}}
+	if _, err := reconciler.Reconcile(context.Background(), request); err == nil {
+		t.Fatal("Agent without a supplied workspace volume was reconciled")
+	}
+	var reconciled polisv1alpha1.Agent
+	if err := client.Get(context.Background(), request.NamespacedName, &reconciled); err != nil {
+		t.Fatal(err)
+	}
+	if len(reconciled.Status.Conditions) != 1 || reconciled.Status.Conditions[0].Status != metav1.ConditionFalse {
+		t.Fatalf("status = %#v", reconciled.Status)
+	}
+}
+
 func TestAgentReconcilerProjectsMessagingPolicy(t *testing.T) {
 	agent := testAgent()
 	agent.Spec.PodTemplate.Spec.Containers[0].Env = append(agent.Spec.PodTemplate.Spec.Containers[0].Env,
 		corev1.EnvVar{Name: "POLIS_ALLOWED_RECIPIENTS", Value: `["forged"]`})
 	agent.Spec.Messaging = &polisv1alpha1.AgentMessaging{AllowedRecipients: []string{"reviewer", "researcher"}}
-	templateNames, claimNames, err := validateAgent(agent)
-	if err != nil {
+	if err := validateAgent(agent); err != nil {
 		t.Fatal(err)
 	}
-	template, err := (&AgentReconciler{}).podTemplate(agent, templateNames, claimNames)
+	template, err := (&AgentReconciler{}).podTemplate(agent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +164,7 @@ func TestAgentReconcilerProjectsMessagingPolicy(t *testing.T) {
 	}
 
 	agent.Spec.Messaging = &polisv1alpha1.AgentMessaging{}
-	template, err = (&AgentReconciler{}).podTemplate(agent, templateNames, claimNames)
+	template, err = (&AgentReconciler{}).podTemplate(agent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +173,7 @@ func TestAgentReconcilerProjectsMessagingPolicy(t *testing.T) {
 	}
 
 	agent.Spec.Messaging = nil
-	template, err = (&AgentReconciler{}).podTemplate(agent, templateNames, claimNames)
+	template, err = (&AgentReconciler{}).podTemplate(agent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,20 +247,14 @@ func testAgent() *polisv1alpha1.Agent {
 				Image:   "ghcr.io/adamtopaz/polis-pi:main",
 				Command: []string{"/bin/polis-pi-agent", "--thinking", "high"},
 			},
-			VolumeClaimTemplates: []corev1.PersistentVolumeClaim{{
-				ObjectMeta: metav1.ObjectMeta{Name: "workspace"},
-				Spec: corev1.PersistentVolumeClaimSpec{
-					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-					Resources:   corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("5Gi")}},
-				},
-			}},
 			PodTemplate: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
 				Containers: []corev1.Container{{
 					Name: "agent", VolumeMounts: []corev1.VolumeMount{{Name: "shared-research", MountPath: "/workspace/shared"}},
 				}},
-				Volumes: []corev1.Volume{{
-					Name: "shared-research", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "shared-research"}},
-				}},
+				Volumes: []corev1.Volume{
+					{Name: "workspace", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "durable-research"}}},
+					{Name: "shared-research", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "shared-research"}}},
+				},
 			}},
 		},
 	}
@@ -251,6 +267,15 @@ func hasVolumeMount(mounts []corev1.VolumeMount, name string) bool {
 		}
 	}
 	return false
+}
+
+func volumeClaimName(volumes []corev1.Volume, name string) string {
+	for _, volume := range volumes {
+		if volume.Name == name && volume.PersistentVolumeClaim != nil {
+			return volume.PersistentVolumeClaim.ClaimName
+		}
+	}
+	return ""
 }
 
 func envValue(environment []corev1.EnvVar, name string) string {

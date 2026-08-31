@@ -51,25 +51,17 @@ type AgentSpec struct {
 	// +optional
 	Messaging *AgentMessaging `json:"messaging,omitempty"`
 
-	// VolumeClaimTemplates creates retained, agent-private claims named
-	// <agent>-<template>. A template named workspace is required and is mounted
-	// at /workspace. Other templates can be mounted through PodTemplate.
-	// +kubebuilder:validation:MinItems=1
-	VolumeClaimTemplates []corev1.PersistentVolumeClaim `json:"volumeClaimTemplates"`
-
-	// PodTemplate carries ordinary Kubernetes pod settings. When supplied, its
-	// pod spec contains exactly one container named agent; Polis injects the
-	// worker contract. Additional volumes and init containers are preserved.
-	// +optional
-	PodTemplate corev1.PodTemplateSpec `json:"podTemplate,omitempty"`
+	// PodTemplate carries ordinary Kubernetes pod settings. Its pod spec must
+	// supply a volume named workspace, which Polis mounts at /workspace. The pod
+	// spec may also contain one container named agent; Polis injects the worker
+	// contract. Additional volumes and init containers are preserved.
+	PodTemplate corev1.PodTemplateSpec `json:"podTemplate"`
 }
 
 type AgentStatus struct {
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
 	Deployment string `json:"deployment,omitempty"`
-
-	Claims []string `json:"claims,omitempty"`
 
 	// +listType=map
 	// +listMapKey=type

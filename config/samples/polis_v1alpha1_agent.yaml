@@ -11,12 +11,9 @@ spec:
   messaging:
     allowedRecipients:
       - sample
-  volumeClaimTemplates:
-    - metadata:
-        name: workspace
-      spec:
-        accessModes:
-          - ReadWriteOnce
-        resources:
-          requests:
-            storage: 1Gi
+  podTemplate:
+    spec:
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: sample-workspace-data

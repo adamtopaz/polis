@@ -15,8 +15,9 @@ or model abstraction. An agent is only:
 
 On Kubernetes, an `Agent` custom resource is the single source of truth for
 identity, charter, runtime image and command, pod configuration, and private
-volume claims. Runtime state and communication remain in Polis rather than in
-the Kubernetes API.
+workspace volume reference. Workspace PVCs and other storage are ordinary,
+separately managed Kubernetes resources. Runtime state and communication remain
+in Polis rather than in the Kubernetes API.
 
 The project is experimental. The current implementation favors a small,
 understandable consistency model over premature scale machinery.
@@ -56,7 +57,7 @@ Work begins when an operator or an agent supplies a message.
 | --- | --- | --- |
 | `polis` | Agent runtime | Capability CLI for the current agent's mailbox, journal, and messaging. |
 | `polisctl` | Operator | Applies, inspects, messages, pauses, resumes, and terminates agents. |
-| `polis-controller` | Infrastructure | Runs the Kubebuilder controller manager and reconciles Agent pods and PVCs. |
+| `polis-controller` | Infrastructure | Runs the Kubebuilder controller manager and reconciles Agent pods. |
 | `polis-mailbox` | Infrastructure | Serves messaging and coordination from its own durable database. |
 | `polis-worker` | Infrastructure | Is pinned to one agent and supervises its runtime process. |
 | `polis-pi-agent` | Agent runtime | Persistent TypeScript runtime built directly on the Pi SDK. |
@@ -91,12 +92,24 @@ cannot continue alongside its replacement.
 
 Polis is a Kubebuilder project. Its typed API lives in `api/v1alpha1`, the
 reconciler lives in `internal/controller`, and generated CRD and RBAC manifests
-live under `config/`. The controller-runtime cache watches `Agent` resources,
-owned Deployments, and labeled retained PVCs.
+live under `config/`. The controller-runtime cache watches `Agent` resources
+and their owned Deployments. It has no PVC permissions.
 
-Declare an agent with ordinary Kubernetes YAML:
+Declare the workspace independently, then pass it to an agent with ordinary
+Kubernetes pod volume configuration:
 
 ```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: durable-research
+  namespace: polis
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+---
 apiVersion: polis.dev/v1alpha1
 kind: Agent
 metadata:
@@ -119,14 +132,12 @@ spec:
   messaging:
     allowedRecipients:
       - researcher
-  volumeClaimTemplates:
-    - metadata:
-        name: workspace
-      spec:
-        accessModes: [ReadWriteOnce]
-        resources:
-          requests:
-            storage: 5Gi
+  podTemplate:
+    spec:
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: durable-research
 ```
 
 Apply and inspect it through Kubernetes:
@@ -137,12 +148,13 @@ kubectl -n polis get agents.polis.dev,deployments,pods,pvc
 kubectl -n polis describe agents.polis.dev researcher
 ```
 
-The reconciler idempotently creates a retained `researcher-workspace` PVC and
-exactly one `Recreate` Deployment with one agent container. It injects the
-worker command, charter, runtime command, mailbox connection, private workspace
-mount, and credential boundary. `podTemplate` preserves native pod settings
-such as resources, affinity, tolerations, init containers, shared PVC volumes,
-and volume mounts.
+The reconciler creates exactly one `Recreate` Deployment with one agent
+container. It injects the worker command, charter, runtime command, mailbox
+connection, `/workspace` mount, and credential boundary. The required pod
+volume is named `workspace`, but its volume source and PVC name are entirely
+operator-controlled. `podTemplate` preserves native pod settings such as
+resources, affinity, tolerations, init containers, other volumes, and volume
+mounts.
 
 `spec.messaging.allowedRecipients` is a directional, exact-ID allow-list for
 messages authored by this agent. The example permits `researcher` to message
@@ -160,12 +172,16 @@ escalate privileges, have all Linux capabilities dropped, use the runtime
 default seccomp profile, and receive a read-only root filesystem. Writable
 state is limited to mounted volumes such as `/workspace` and `/tmp`.
 
-Private PVCs intentionally have no owner reference. Deleting an `Agent`
-garbage-collects its Deployment but retains its private claims and Polis
-history. Reapplying the same name reconnects that state unless the logical
-agent was permanently terminated. Shared folders are ordinary separately
-declared PVCs referenced from `spec.podTemplate`; Polis adds no storage
-abstraction.
+Polis never creates, updates, watches, owns, or deletes workspace PVCs. Deleting
+an `Agent` garbage-collects only its Deployment. A different Agent ID can mount
+the same claim by keeping `claimName` unchanged, so filesystem and Pi session
+state are independent from mailbox identity. The old and new IDs still have
+separate mailbox histories. All additional and shared storage uses the same
+ordinary pod volume mechanism; Polis adds no storage abstraction.
+
+Workspace reassignment should normally be sequential: stop or delete the old
+Agent before starting another Agent against the same writable claim. Polis does
+not coordinate concurrent filesystem access between different Agent IDs.
 
 The product installation is generated under `config/default`:
 
@@ -175,8 +191,8 @@ kubectl apply --server-side -k config/default
 
 It contains the CRD, controller Deployment and ServiceAccount, generated RBAC,
 mailbox Deployment and Service, and mailbox PVC. Environment-specific Agent
-objects, credentials, storage classes, and shared claims belong in a deployment
-repository or overlay.
+objects, workspace PVCs, credentials, storage classes, and shared claims belong
+in a deployment repository or overlay.
 
 ## Operator workflow
 
@@ -390,8 +406,8 @@ its one agent. The local k3s deployment uses the production Pi image.
 ## Deliberate limits
 
 - The mailbox is one bbolt writer, not a highly available replicated service.
-- Every declared agent has its own pod and private PVC, even while waiting
-  without making LLM calls.
+- Every declared agent has its own pod and a supplied workspace volume, even
+  while waiting without making LLM calls.
 - Shared folders use ordinary Kubernetes PVCs and volume mounts. Cross-node
   sharing therefore depends on the cluster's storage semantics.
 - There is no Polis scheduler. Agents can use Bash to arrange future invocations
