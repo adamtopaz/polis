@@ -41,6 +41,13 @@ func TestAgentCRDPreservesEmbeddedTemplateMetadata(t *testing.T) {
 	if !slices.Contains(spec.Required, "podTemplate") {
 		t.Fatalf("podTemplate is not required: %#v", spec.Required)
 	}
+	additionalInstructions := requiredProperty(t, spec, "additionalInstructions")
+	if slices.Contains(spec.Required, "additionalInstructions") {
+		t.Fatalf("additionalInstructions is required: %#v", spec.Required)
+	}
+	if additionalInstructions.MinLength == nil || *additionalInstructions.MinLength != 1 {
+		t.Fatalf("additionalInstructions does not reject empty values: %#v", additionalInstructions.MinLength)
+	}
 	if _, found := spec.Properties["volumeClaimTemplates"]; found {
 		t.Fatal("removed volumeClaimTemplates remains in the CRD")
 	}

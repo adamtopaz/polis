@@ -1,6 +1,8 @@
 package worker
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -14,6 +16,8 @@ func TestControlPlaneCredentialsAreNotPassedToAgentRuntime(t *testing.T) {
 		"POLIS_WORKER_TOKEN_FILE=/run/secrets/worker-token",
 		"POLIS_AGENT_ID=alpha",
 		`POLIS_ALLOWED_RECIPIENTS=["beta"]`,
+		"POLIS_ADDITIONAL_INSTRUCTIONS=forged instructions",
+		"POLIS_ADDITIONAL_INSTRUCTIONS_PATH=/tmp/forged-instructions",
 	}
 	filtered := withoutControlPlaneCredentials(environment)
 	for _, credential := range environment[1:5] {
@@ -29,5 +33,39 @@ func TestControlPlaneCredentialsAreNotPassedToAgentRuntime(t *testing.T) {
 	}
 	if slices.Contains(filtered, `POLIS_ALLOWED_RECIPIENTS=["beta"]`) {
 		t.Fatalf("supervisor messaging policy reached runtime unchanged: %#v", filtered)
+	}
+	for _, variable := range filtered {
+		if variable == "POLIS_ADDITIONAL_INSTRUCTIONS=forged instructions" ||
+			variable == "POLIS_ADDITIONAL_INSTRUCTIONS_PATH=/tmp/forged-instructions" {
+			t.Fatalf("forged additional instructions reached runtime: %#v", filtered)
+		}
+	}
+}
+
+func TestWritePromptFiles(t *testing.T) {
+	metadata := t.TempDir()
+	charterPath, additionalPath, err := writePromptFiles(metadata, "Explore carefully.", "Keep reports concise.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{
+		charterPath:    "Explore carefully.\n",
+		additionalPath: "Keep reports concise.\n",
+	} {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(contents) != want {
+			t.Fatalf("%s = %q, want %q", filepath.Base(path), contents, want)
+		}
+	}
+
+	_, additionalPath, err = writePromptFiles(metadata, "Explore carefully.", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if additionalPath != "" {
+		t.Fatalf("omitted instructions path = %q", additionalPath)
 	}
 }

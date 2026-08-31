@@ -11,14 +11,25 @@ const agent: Agent = {
   phase: "running",
 };
 
-test("system prompt identifies the autonomous agent and preserves its charter", () => {
-  const prompt = polisSystemPrompt(agent, "Discover useful things.\n");
+test("system prompt identifies the agent and appends charter and additional instructions", () => {
+  const prompt = polisSystemPrompt(
+    agent,
+    "Discover useful things.\n",
+    "Keep reports concise.\n",
+  );
   assert.match(prompt, /You are researcher/);
   assert.match(prompt, /Discover useful things\./);
+  assert.match(prompt, /Additional instructions:\n\nKeep reports concise\./);
   assert.match(prompt, /autonomous/);
   assert.match(prompt, /invoke `polis send` at that time/);
   assert.doesNotMatch(prompt, /polis schedule/);
   assert.match(prompt, /Never reveal credentials/);
+  assert.ok(prompt.indexOf("Never reveal credentials") < prompt.indexOf("Keep reports concise."));
+});
+
+test("system prompt omits the additional instructions section when not configured", () => {
+  const prompt = polisSystemPrompt(agent, "Discover useful things.");
+  assert.doesNotMatch(prompt, /Additional instructions:/);
 });
 
 test("turn prompt serializes unread mailbox bodies", () => {

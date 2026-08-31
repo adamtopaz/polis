@@ -42,8 +42,11 @@ async function main(): Promise<void> {
     onUnavailable: (error) => log("mailbox.unavailable", { error: errorMessage(error) }),
     onAvailable: (unavailableMs) => log("mailbox.available", { unavailable_ms: unavailableMs }),
   });
-  const [charter, agent] = await Promise.all([
+  const [charter, additionalInstructions, agent] = await Promise.all([
     readFile(config.charterPath, "utf8"),
+    config.additionalInstructionsPath === undefined
+      ? Promise.resolve(undefined)
+      : readFile(config.additionalInstructionsPath, "utf8"),
     callPolis(() => polis.self(shutdown.signal)),
   ]);
   const authPath = config.authFile === undefined
@@ -75,7 +78,10 @@ async function main(): Promise<void> {
     cwd: config.workspace,
     agentDir: config.agentDir,
     settingsManager,
-    appendSystemPromptOverride: (base) => [...base, polisSystemPrompt(agent, charter)],
+    appendSystemPromptOverride: (base) => [
+      ...base,
+      polisSystemPrompt(agent, charter, additionalInstructions),
+    ],
   });
   await resourceLoader.reload();
   // Resource reload refreshes file-backed settings; runtime arguments are the final overrides.

@@ -19,17 +19,18 @@ import (
 const incarnationRetryDelay = 2 * time.Second
 
 type Config struct {
-	MailboxURL        string
-	WorkerToken       string
-	AgentID           string
-	ID                string
-	Charter           string
-	Runtime           []string
-	Workspace         string
-	LeaseDuration     time.Duration
-	ShutdownGrace     time.Duration
-	AllowedRecipients *[]string
-	Logger            *slog.Logger
+	MailboxURL             string
+	WorkerToken            string
+	AgentID                string
+	ID                     string
+	Charter                string
+	AdditionalInstructions string
+	Runtime                []string
+	Workspace              string
+	LeaseDuration          time.Duration
+	ShutdownGrace          time.Duration
+	AllowedRecipients      *[]string
+	Logger                 *slog.Logger
 }
 
 func Run(ctx context.Context, config Config) error {
@@ -97,21 +98,25 @@ func runIncarnation(parent context.Context, api *client.Client, config Config, l
 		reportExit(api, lease.Token, "prepare workspace: "+err.Error(), log)
 		return
 	}
-	charterPath := filepath.Join(metadata, "charter.md")
-	if err := os.WriteFile(charterPath, []byte(config.Charter+"\n"), 0o640); err != nil {
-		reportExit(api, lease.Token, "write charter: "+err.Error(), log)
+	charterPath, additionalInstructionsPath, err := writePromptFiles(metadata, config.Charter, config.AdditionalInstructions)
+	if err != nil {
+		reportExit(api, lease.Token, err.Error(), log)
 		return
 	}
 
 	command := exec.Command(config.Runtime[0], config.Runtime[1:]...)
 	command.Dir = workspace
-	command.Env = append(withoutControlPlaneCredentials(os.Environ()),
-		"POLIS_URL="+config.MailboxURL,
-		"POLIS_AGENT_ID="+lease.Agent.ID,
-		"POLIS_AGENT_TOKEN="+lease.Token,
-		"POLIS_WORKSPACE="+workspace,
-		"POLIS_CHARTER_PATH="+charterPath,
-	)
+	runtimeEnvironment := []string{
+		"POLIS_URL=" + config.MailboxURL,
+		"POLIS_AGENT_ID=" + lease.Agent.ID,
+		"POLIS_AGENT_TOKEN=" + lease.Token,
+		"POLIS_WORKSPACE=" + workspace,
+		"POLIS_CHARTER_PATH=" + charterPath,
+	}
+	if additionalInstructionsPath != "" {
+		runtimeEnvironment = append(runtimeEnvironment, "POLIS_ADDITIONAL_INSTRUCTIONS_PATH="+additionalInstructionsPath)
+	}
+	command.Env = append(withoutControlPlaneCredentials(os.Environ()), runtimeEnvironment...)
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
 	command.Stdin = nil
@@ -168,6 +173,21 @@ func runIncarnation(parent context.Context, api *client.Client, config Config, l
 	}
 }
 
+func writePromptFiles(metadata, charter, additionalInstructions string) (string, string, error) {
+	charterPath := filepath.Join(metadata, "charter.md")
+	if err := os.WriteFile(charterPath, []byte(charter+"\n"), 0o640); err != nil {
+		return "", "", fmt.Errorf("write charter: %w", err)
+	}
+	if strings.TrimSpace(additionalInstructions) == "" {
+		return charterPath, "", nil
+	}
+	additionalInstructionsPath := filepath.Join(metadata, "additional-instructions.md")
+	if err := os.WriteFile(additionalInstructionsPath, []byte(additionalInstructions+"\n"), 0o640); err != nil {
+		return "", "", fmt.Errorf("write additional instructions: %w", err)
+	}
+	return charterPath, additionalInstructionsPath, nil
+}
+
 func withoutControlPlaneCredentials(environment []string) []string {
 	filtered := make([]string, 0, len(environment))
 	for _, variable := range environment {
@@ -178,9 +198,11 @@ func withoutControlPlaneCredentials(environment []string) []string {
 			strings.HasPrefix(variable, "POLIS_AGENT_ID=") ||
 			strings.HasPrefix(variable, "POLIS_AGENT_TOKEN=") ||
 			strings.HasPrefix(variable, "POLIS_CHARTER=") ||
+			strings.HasPrefix(variable, "POLIS_ADDITIONAL_INSTRUCTIONS=") ||
 			strings.HasPrefix(variable, "POLIS_WORKSPACE=") ||
 			strings.HasPrefix(variable, "POLIS_ALLOWED_RECIPIENTS=") ||
-			strings.HasPrefix(variable, "POLIS_CHARTER_PATH=") {
+			strings.HasPrefix(variable, "POLIS_CHARTER_PATH=") ||
+			strings.HasPrefix(variable, "POLIS_ADDITIONAL_INSTRUCTIONS_PATH=") {
 			continue
 		}
 		filtered = append(filtered, variable)

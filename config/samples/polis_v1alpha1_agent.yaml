@@ -4,6 +4,9 @@ metadata:
   name: sample
 spec:
   charter: Pursue useful work and wait for durable mailbox triggers.
+  additionalInstructions: |
+    Keep operator-facing reports concise and distinguish observations from
+    hypotheses.
   runtime:
     image: ghcr.io/adamtopaz/polis-pi:main
     command:

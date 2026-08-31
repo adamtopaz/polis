@@ -46,6 +46,13 @@ spec:
             type: object
           spec:
             properties:
+              additionalInstructions:
+                description: |-
+                  AdditionalInstructions are appended at the end of the runtime's system
+                  prompt, after the standard Polis guidance. They are optional and may
+                  contain runtime-specific guidance.
+                minLength: 1
+                type: string
               charter:
                 description: Charter is appended to the runtime's system prompt.
                 minLength: 1

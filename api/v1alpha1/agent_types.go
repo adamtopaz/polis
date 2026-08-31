@@ -43,6 +43,13 @@ type AgentSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	Charter string `json:"charter"`
 
+	// AdditionalInstructions are appended at the end of the runtime's system
+	// prompt, after the standard Polis guidance. They are optional and may
+	// contain runtime-specific guidance.
+	// +kubebuilder:validation:MinLength=1
+	// +optional
+	AdditionalInstructions string `json:"additionalInstructions,omitempty"`
+
 	Runtime AgentRuntime `json:"runtime"`
 
 	// Messaging restricts agent-authored messages. When omitted, outbound

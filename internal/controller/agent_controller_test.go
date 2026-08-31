@@ -67,7 +67,9 @@ func TestAgentReconcilerCreatesDedicatedTopologyFromSuppliedWorkspace(t *testing
 		t.Fatalf("agent container = %#v", container)
 	}
 	if !slices.Equal(container.Args, []string{"--", "/bin/polis-pi-agent", "--thinking", "high"}) ||
-		envValue(container.Env, "POLIS_CHARTER") != agent.Spec.Charter || envValue(container.Env, "POLIS_URL") != "http://polis-mailbox" {
+		envValue(container.Env, "POLIS_CHARTER") != agent.Spec.Charter ||
+		envValue(container.Env, "POLIS_ADDITIONAL_INSTRUCTIONS") != agent.Spec.AdditionalInstructions ||
+		envValue(container.Env, "POLIS_URL") != "http://polis-mailbox" {
 		t.Fatalf("runtime configuration was not projected into the pod: %#v", container)
 	}
 	if got := volumeClaimName(deployment.Spec.Template.Spec.Volumes, "workspace"); got != "durable-research" {
@@ -144,6 +146,18 @@ func TestAgentReconcilerRequiresSuppliedWorkspaceVolume(t *testing.T) {
 	}
 	if len(reconciled.Status.Conditions) != 1 || reconciled.Status.Conditions[0].Status != metav1.ConditionFalse {
 		t.Fatalf("status = %#v", reconciled.Status)
+	}
+}
+
+func TestAgentAdditionalInstructionsAreOptionalButNotBlank(t *testing.T) {
+	agent := testAgent()
+	agent.Spec.AdditionalInstructions = ""
+	if err := validateAgent(agent); err != nil {
+		t.Fatalf("omitted additional instructions were rejected: %v", err)
+	}
+	agent.Spec.AdditionalInstructions = " \n\t"
+	if err := validateAgent(agent); err == nil {
+		t.Fatal("blank additional instructions were accepted")
 	}
 }
 
@@ -242,14 +256,19 @@ func testAgent() *polisv1alpha1.Agent {
 		TypeMeta:   metav1.TypeMeta{APIVersion: "polis.dev/v1alpha1", Kind: "Agent"},
 		ObjectMeta: metav1.ObjectMeta{Name: "researcher", Namespace: "polis", UID: "researcher-uid", Generation: 1},
 		Spec: polisv1alpha1.AgentSpec{
-			Charter: "Research useful things.",
+			Charter:                "Research useful things.",
+			AdditionalInstructions: "Keep reports concise.",
 			Runtime: polisv1alpha1.AgentRuntime{
 				Image:   "ghcr.io/adamtopaz/polis-pi:main",
 				Command: []string{"/bin/polis-pi-agent", "--thinking", "high"},
 			},
 			PodTemplate: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
 				Containers: []corev1.Container{{
-					Name: "agent", VolumeMounts: []corev1.VolumeMount{{Name: "shared-research", MountPath: "/workspace/shared"}},
+					Name: "agent",
+					Env: []corev1.EnvVar{{
+						Name: "POLIS_ADDITIONAL_INSTRUCTIONS", Value: "forged instructions",
+					}},
+					VolumeMounts: []corev1.VolumeMount{{Name: "shared-research", MountPath: "/workspace/shared"}},
 				}},
 				Volumes: []corev1.Volume{
 					{Name: "workspace", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "durable-research"}}},

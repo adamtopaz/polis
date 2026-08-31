@@ -53,8 +53,9 @@ var (
 	reservedVolumes = []string{"tmp", "worker-auth-source", "worker-auth"}
 	reservedMounts  = []string{"workspace", "tmp", "worker-auth-source", "worker-auth"}
 	reservedEnv     = []string{
-		"POLIS_URL", "POLIS_AGENT_ID", "POLIS_CHARTER", "POLIS_WORKSPACE", "POLIS_LEASE_DURATION",
-		"POLIS_SHUTDOWN_GRACE", "POLIS_WORKER_TOKEN", "POLIS_WORKER_TOKEN_FILE", "POLIS_ALLOWED_RECIPIENTS",
+		"POLIS_URL", "POLIS_AGENT_ID", "POLIS_CHARTER", "POLIS_ADDITIONAL_INSTRUCTIONS", "POLIS_WORKSPACE",
+		"POLIS_LEASE_DURATION", "POLIS_SHUTDOWN_GRACE", "POLIS_WORKER_TOKEN", "POLIS_WORKER_TOKEN_FILE",
+		"POLIS_ALLOWED_RECIPIENTS",
 	}
 )
 
@@ -164,6 +165,7 @@ func (r *AgentReconciler) podTemplate(agent *polisv1alpha1.Agent) (corev1.PodTem
 		corev1.EnvVar{Name: "POLIS_URL", Value: r.mailboxURL()},
 		corev1.EnvVar{Name: "POLIS_AGENT_ID", Value: agent.Name},
 		corev1.EnvVar{Name: "POLIS_CHARTER", Value: agent.Spec.Charter},
+		corev1.EnvVar{Name: "POLIS_ADDITIONAL_INSTRUCTIONS", Value: agent.Spec.AdditionalInstructions},
 		corev1.EnvVar{Name: "POLIS_WORKSPACE", Value: workspacePath},
 		corev1.EnvVar{Name: "POLIS_LEASE_DURATION", Value: "30s"},
 		corev1.EnvVar{Name: "POLIS_SHUTDOWN_GRACE", Value: "10s"},
@@ -221,6 +223,9 @@ func validateAgent(agent *polisv1alpha1.Agent) error {
 	}
 	if strings.TrimSpace(agent.Spec.Charter) == "" {
 		return errors.New("spec.charter is required")
+	}
+	if agent.Spec.AdditionalInstructions != "" && strings.TrimSpace(agent.Spec.AdditionalInstructions) == "" {
+		return errors.New("spec.additionalInstructions must not be blank")
 	}
 	if strings.TrimSpace(agent.Spec.Runtime.Image) == "" {
 		return errors.New("spec.runtime.image is required")

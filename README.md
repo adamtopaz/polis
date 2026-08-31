@@ -7,17 +7,17 @@ communication, and stays out of how they decide what to do.
 Polis deliberately has no task model, workflow engine, project model, planner,
 or model abstraction. An agent is only:
 
-- a stable identity and charter;
+- a stable identity, charter, and optional additional instructions;
 - an arbitrary runtime command;
 - a durable workspace;
 - a durable mailbox and event journal;
 - an `active`, `paused`, or `terminated` desired state.
 
 On Kubernetes, an `Agent` custom resource is the single source of truth for
-identity, charter, runtime image and command, pod configuration, and private
-workspace volume reference. Workspace PVCs and other storage are ordinary,
-separately managed Kubernetes resources. Runtime state and communication remain
-in Polis rather than in the Kubernetes API.
+identity, charter, optional additional instructions, runtime image and command,
+pod configuration, and private workspace volume reference. Workspace PVCs and
+other storage are ordinary, separately managed Kubernetes resources. Runtime
+state and communication remain in Polis rather than in the Kubernetes API.
 
 The project is experimental. The current implementation favors a small,
 understandable consistency model over premature scale machinery.
@@ -64,9 +64,10 @@ Work begins when an operator or an agent supplies a message.
 
 The mailbox stores dynamic agent records, messages, journals, and fenced leases
 in one bbolt database. The `Agent` custom resource remains the only desired
-configuration: the controller projects its charter and runtime argument vector
-into the dedicated worker pod. The mailbox never stores them. There is no
-intervening shell or workflow engine and no multi-agent worker mode.
+configuration: the controller projects its charter, additional instructions,
+and runtime argument vector into the dedicated worker pod. The mailbox never
+stores them. There is no intervening shell or workflow engine and no
+multi-agent worker mode.
 
 An authenticated worker registers its stable identity in the mailbox on its
 first lease acquisition. Consequently, `kubectl get agents.polis.dev` lists
@@ -81,6 +82,7 @@ POLIS_AGENT_ID
 POLIS_AGENT_TOKEN
 POLIS_WORKSPACE
 POLIS_CHARTER_PATH
+POLIS_ADDITIONAL_INSTRUCTIONS_PATH  # only when configured
 ```
 
 `POLIS_AGENT_TOKEN` is both a short-lived API capability and an incarnation
@@ -117,6 +119,9 @@ metadata:
   namespace: polis
 spec:
   charter: Investigate useful subjects autonomously and preserve findings.
+  additionalInstructions: |
+    Keep operator-facing reports concise and distinguish observations from
+    hypotheses.
   runtime:
     image: ghcr.io/adamtopaz/polis-pi:main
     command:
@@ -149,12 +154,18 @@ kubectl -n polis describe agents.polis.dev researcher
 ```
 
 The reconciler creates exactly one `Recreate` Deployment with one agent
-container. It injects the worker command, charter, runtime command, mailbox
-connection, `/workspace` mount, and credential boundary. The required pod
-volume is named `workspace`, but its volume source and PVC name are entirely
-operator-controlled. `podTemplate` preserves native pod settings such as
-resources, affinity, tolerations, init containers, other volumes, and volume
-mounts.
+container. It injects the worker command, charter, optional additional
+instructions, runtime command, mailbox connection, `/workspace` mount, and
+credential boundary. The required pod volume is named `workspace`, but its
+volume source and PVC name are entirely operator-controlled. `podTemplate`
+preserves native pod settings such as resources, affinity, tolerations, init
+containers, other volumes, and volume mounts.
+
+`spec.charter` defines the agent's durable purpose. The optional
+`spec.additionalInstructions` field adds more specific guidance at the end of
+the appended Pi system prompt, after Polis's standard guidance. Updating either
+field changes the Agent generation and replaces its runtime pod; its workspace
+and Pi session remain.
 
 `spec.messaging.allowedRecipients` is a directional, exact-ID allow-list for
 messages authored by this agent. The example permits `researcher` to message
@@ -299,7 +310,8 @@ incarnation:
 
 1. resume the most recent session from
    `<workspace>/.polis/pi-sessions`;
-2. append the stable agent identity and charter to Pi's system prompt;
+2. append the stable agent identity, charter, and any additional instructions
+   to Pi's system prompt;
 3. long-poll the durable mailbox without making LLM calls;
 4. supply each queued batch to Pi as one trigger;
 5. let Pi reason and use its read, Bash, edit, write, grep, find, and ls tools

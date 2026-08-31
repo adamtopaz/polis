@@ -31,6 +31,7 @@ func run(ctx context.Context, args []string) error {
 	agentID := flags.String("agent", env("POLIS_AGENT_ID", ""), "agent id this worker exclusively supervises")
 	id := flags.String("id", env("POLIS_WORKER_ID", env("HOSTNAME", "worker")), "worker id")
 	charter := flags.String("charter", env("POLIS_CHARTER", ""), "stable agent charter")
+	additionalInstructions := flags.String("additional-instructions", env("POLIS_ADDITIONAL_INSTRUCTIONS", ""), "optional additional system-prompt instructions")
 	workspace := flags.String("workspace", env("POLIS_WORKSPACE", "./workspace"), "durable agent workspace")
 	lease := flags.Duration("lease", envDuration("POLIS_LEASE_DURATION", 30*time.Second), "incarnation lease duration")
 	grace := flags.Duration("shutdown-grace", envDuration("POLIS_SHUTDOWN_GRACE", 10*time.Second), "runtime shutdown grace")
@@ -56,17 +57,18 @@ func run(ctx context.Context, args []string) error {
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	return worker.Run(ctx, worker.Config{
-		MailboxURL:        *mailboxURL,
-		WorkerToken:       workerToken,
-		AgentID:           *agentID,
-		ID:                *id,
-		Charter:           *charter,
-		Runtime:           flags.Args(),
-		Workspace:         *workspace,
-		LeaseDuration:     *lease,
-		ShutdownGrace:     *grace,
-		AllowedRecipients: allowedRecipients,
-		Logger:            logger,
+		MailboxURL:             *mailboxURL,
+		WorkerToken:            workerToken,
+		AgentID:                *agentID,
+		ID:                     *id,
+		Charter:                *charter,
+		AdditionalInstructions: *additionalInstructions,
+		Runtime:                flags.Args(),
+		Workspace:              *workspace,
+		LeaseDuration:          *lease,
+		ShutdownGrace:          *grace,
+		AllowedRecipients:      allowedRecipients,
+		Logger:                 logger,
 	})
 }
 
