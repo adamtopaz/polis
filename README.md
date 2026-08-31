@@ -122,8 +122,8 @@ Apply and inspect it through Kubernetes:
 
 ```console
 kubectl apply -f researcher.yaml
-kubectl -n polis get agents,deployments,pods,pvc
-kubectl -n polis describe agent researcher
+kubectl -n polis get agents.polis.dev,deployments,pods,pvc
+kubectl -n polis describe agents.polis.dev researcher
 ```
 
 The reconciler idempotently creates the Polis record, a retained
