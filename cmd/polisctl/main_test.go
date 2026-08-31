@@ -33,6 +33,9 @@ func TestHistoryCommand(t *testing.T) {
 	if err := run(context.Background(), []string{"history", "--namespace", "agents", "--context", "test-cluster", "--tail", "1", "researcher"}); err != nil {
 		t.Fatal(err)
 	}
+	if err := run(context.Background(), []string{"history", "--namespace", "agents", "--context", "test-cluster", "--human", "researcher"}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestHistoryCommandRejectsInvalidArguments(t *testing.T) {

@@ -200,7 +200,8 @@ in a deployment repository or overlay.
 `POLIS_URL` (default `http://localhost:8080`) and the operator credential from
 `POLIS_OPERATOR_TOKEN_FILE`, or from `POLIS_OPERATOR_TOKEN` for local
 development. The `history` command instead uses the current kubeconfig through
-the official Kubernetes Go client. Every command emits JSON. Agent
+the official Kubernetes Go client. Commands emit JSON by default; history also
+has a human-readable transcript view. Agent
 configuration is intentionally absent: Kubernetes and the `Agent` CR are its
 single declarative path.
 
@@ -235,7 +236,7 @@ The full operator surface is:
 | `polisctl agent state ID active\|paused\|terminated` | Change desired state. Termination is irreversible. |
 | `polisctl message [--sender LABEL] ID JSON` | Append a durable message. The default sender is `operator`. |
 | `polisctl events [ID]` | Return fleet-wide events or only one agent's lifecycle and journal events. |
-| `polisctl history [--namespace NAMESPACE] [--context CONTEXT] [--tail N] ID` | Read the newest persisted Pi session from a running agent's workspace. |
+| `polisctl history [--namespace NAMESPACE] [--context CONTEXT] [--tail N] [--human] ID` | Read the newest persisted Pi session from a running agent's workspace. |
 
 Session history remains on the workspace PVC and is not copied into the
 mailbox. `polisctl history` discovers the agent pod by label and uses the
@@ -245,7 +246,12 @@ one structured JSON document:
 ```console
 polisctl history researcher
 polisctl history --tail 20 researcher
+polisctl history --human --tail 20 researcher
 ```
+
+JSON remains the default for scripts. `--human` renders session metadata and a
+plain-text transcript, including reasoning summaries, tool calls and results,
+and compaction summaries. It omits opaque signatures and binary image data.
 
 The command requires Kubernetes permission to list pods and exec into the
 agent container. It works while the agent pod is running. Session entries can

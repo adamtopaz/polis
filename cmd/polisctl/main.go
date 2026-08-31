@@ -98,6 +98,7 @@ func runHistory(ctx context.Context, args []string) error {
 	namespace := flags.String("namespace", env("POLIS_KUBERNETES_NAMESPACE", "polis"), "Kubernetes namespace")
 	kubeContext := flags.String("context", "", "Kubernetes context (defaults to the current context)")
 	tail := flags.Int("tail", 0, "return only the last N session entries (zero returns all)")
+	human := flags.Bool("human", false, "render a human-readable transcript instead of JSON")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -116,7 +117,13 @@ func runHistory(ctx context.Context, args []string) error {
 		return err
 	}
 	history, err := sessionhistory.Decode(agentID, sessionFile, contents, *tail)
-	return printJSON(history, err)
+	if err != nil {
+		return err
+	}
+	if *human {
+		return sessionhistory.WriteHuman(os.Stdout, history)
+	}
+	return printJSON(history, nil)
 }
 
 func kubernetesLatestSession(ctx context.Context, namespace, kubeContext, agentID string) (string, []byte, error) {
@@ -353,7 +360,7 @@ Usage:
   polisctl agent state ID active|paused|terminated
   polisctl message ID JSON
   polisctl events [ID]
-  polisctl history [--namespace NAMESPACE] [--context CONTEXT] [--tail N] ID
+  polisctl history [--namespace NAMESPACE] [--context CONTEXT] [--tail N] [--human] ID
 `
 }
 
