@@ -13,6 +13,11 @@ or model abstraction. An agent is only:
 - a durable mailbox and event journal;
 - an `active`, `paused`, or `terminated` desired state.
 
+On Kubernetes, an `Agent` custom resource is the single source of truth for
+identity, charter, runtime image and command, pod configuration, and private
+volume claims. Runtime state and communication remain in Polis rather than in
+the Kubernetes API.
+
 The project is experimental. The current implementation favors a small,
 understandable consistency model over premature scale machinery.
 
@@ -41,7 +46,7 @@ The reported phase is derived rather than commanded:
 | `paused` | Desired state is paused. |
 | `terminated` | Desired state is terminated. |
 
-Applying an agent configuration makes a new agent active but does not send it a
+Creating an `Agent` resource makes a new agent active but does not send it a
 first message. Its runtime can initialize and wait without invoking an LLM.
 Work begins when an operator, another agent, or a scheduled self-message
 supplies a trigger.
@@ -52,7 +57,7 @@ supplies a trigger.
 | --- | --- | --- |
 | `polis` | Agent runtime | Capability CLI for the current agent's mailbox, journal, scheduling, and messaging. |
 | `polisctl` | Operator | Applies, inspects, messages, pauses, resumes, and terminates agents. |
-| `polis-controller` | Infrastructure | Stores state and serves the HTTP API. |
+| `polis-controller` | Infrastructure | Runs the Kubebuilder controller manager, stores runtime state, and serves the mailbox HTTP API. |
 | `polis-worker` | Infrastructure | Is pinned to one agent and supervises its runtime process. |
 | `polis-pi-agent` | Agent runtime | Persistent TypeScript runtime built directly on the Pi SDK. |
 | `polis-demo-agent` | Tests | Deterministic persistent runtime distributed only in the demo worker image; it is not an AI agent. |
@@ -78,27 +83,81 @@ fence. The worker renews it while the runtime is healthy. If renewal is lost,
 the worker stops the process before the lease deadline so an old incarnation
 cannot continue alongside its replacement.
 
+## Kubernetes workflow
+
+Polis is a Kubebuilder project. Its typed API lives in `api/v1alpha1`, the
+reconciler lives in `internal/controller`, and generated CRD and RBAC manifests
+live under `config/`. The controller-runtime cache watches `Agent` resources,
+owned Deployments, and labeled retained PVCs.
+
+Declare an agent with ordinary Kubernetes YAML:
+
+```yaml
+apiVersion: polis.dev/v1alpha1
+kind: Agent
+metadata:
+  name: researcher
+  namespace: polis
+spec:
+  charter: Investigate useful subjects autonomously and preserve findings.
+  runtime:
+    image: ghcr.io/adamtopaz/polis-pi:main
+    command:
+      - /bin/polis-pi-agent
+      - --model
+      - openai-codex/gpt-5.5
+      - --thinking
+      - high
+  volumeClaimTemplates:
+    - metadata:
+        name: workspace
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 5Gi
+```
+
+Apply and inspect it through Kubernetes:
+
+```console
+kubectl apply -f researcher.yaml
+kubectl -n polis get agents,deployments,pods,pvc
+kubectl -n polis describe agent researcher
+```
+
+The reconciler idempotently creates the Polis record, a retained
+`researcher-workspace` PVC, and exactly one `Recreate` Deployment with one
+agent container. It injects the worker command, mailbox connection, private
+workspace mount, and credential boundary. `podTemplate` preserves native pod
+settings such as resources, affinity, tolerations, init containers, shared PVC
+volumes, and volume mounts.
+
+Private PVCs intentionally have no owner reference. Deleting an `Agent`
+garbage-collects its Deployment but retains its private claims and Polis
+history. Reapplying the same name reconnects that state unless the logical
+agent was permanently terminated. Shared folders are ordinary separately
+declared PVCs referenced from `spec.podTemplate`; Polis adds no storage
+abstraction.
+
+The product installation is generated under `config/default`:
+
+```console
+kubectl apply --server-side -k config/default
+```
+
+It contains the CRD, controller Deployment and ServiceAccount, generated RBAC,
+mailbox Service, and controller PVC. Environment-specific Agent objects,
+credentials, storage classes, and shared claims belong in a deployment
+repository or overlay.
+
 ## Operator workflow
 
 `polisctl` is a normal Go executable. It reads the controller URL from
 `POLIS_URL` (default `http://localhost:8080`) and the operator credential from
 `POLIS_OPERATOR_TOKEN_FILE`, or from `POLIS_OPERATOR_TOKEN` for local
-development. Every command emits JSON.
-
-Apply a stable Pi agent configuration:
-
-```console
-polisctl agent apply \
-  --id researcher \
-  --charter 'Investigate your assigned subject autonomously and preserve useful findings.' \
-  --runtime '["polis-pi-agent","--model","openai-codex/gpt-5.5","--thinking","high"]'
-```
-
-`agent apply` requires a stable ID. It creates the logical record if absent and
-idempotently updates its charter and runtime if present without changing its
-desired state. Kubernetes topology remains responsible for providing the
-matching dedicated pod and PVC. Applying configuration intentionally does not
-create a mailbox trigger.
+development. Every command emits JSON. Agent configuration is intentionally
+absent: `kubectl` and the `Agent` CR are its single declarative path.
 
 Send the first trigger and inspect progress:
 
@@ -120,7 +179,6 @@ The full operator surface is:
 
 | Command | Effect |
 | --- | --- |
-| `polisctl agent apply --id ID --charter TEXT --runtime JSON` | Idempotently create or update a declaratively managed agent. |
 | `polisctl agent list` | List all agents. |
 | `polisctl agent get ID` | Return one agent's configuration, desired state, phase, and current lease information. |
 | `polisctl agent state ID active\|paused\|terminated` | Change desired state. Termination is irreversible. |
@@ -180,12 +238,18 @@ Messages arriving during a turn remain queued for the next turn. From Bash, the
 model can use `polis` to communicate, journal decisions, or schedule a future
 self-trigger.
 
-Select a model with runtime arguments:
+Select a model with the `Agent` runtime command:
 
-```console
-polisctl agent apply --id agent-id \
-  --charter 'Pursue this work carefully and autonomously.' \
-  --runtime '["polis-pi-agent","--model","provider/model","--thinking","high"]'
+```yaml
+spec:
+  runtime:
+    image: ghcr.io/adamtopaz/polis-pi:main
+    command:
+      - /bin/polis-pi-agent
+      - --model
+      - provider/model
+      - --thinking
+      - high
 ```
 
 `--thinking` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or
@@ -244,11 +308,14 @@ unauthenticated.
 
 ## Build and development
 
-Polis is developed and packaged as a Nix flake:
+Polis is developed and packaged as a Nix flake. The dev shell includes the
+pinned Kubebuilder CLI, Kubernetes tools, Go, and Node:
 
 ```console
 nix develop
-go test ./...
+make manifests
+make generate
+make test
 npm --prefix runtime/pi test
 nix flake check
 nix build .#container
@@ -266,27 +333,16 @@ The main flake outputs are:
 | `.#worker` | Worker process. |
 | `.#demo-agent` | Deterministic test runtime. |
 | `.#pi-runtime` | Persistent Pi SDK runtime. |
+| `.#manifests` | Rendered Kubebuilder/Kustomize installation bundle. |
 | `.#container` | Controller image containing `polis-controller` and `polisctl`. |
 | `.#pi-container` | Production `polis-pi` worker image containing only the Pi runtime. |
 | `.#demo-container` | `polis-demo` worker image containing only the deterministic demo runtime. |
 
-For a local process-level experiment, run the controller and worker in separate
-terminals with distinct development-only credentials:
-
-```console
-POLIS_OPERATOR_TOKEN=dev-operator POLIS_WORKER_TOKEN=dev-worker \
-  nix run .#controller -- --db ./polis.db
-```
-
-```console
-POLIS_WORKER_TOKEN=dev-worker \
-  nix run .#worker -- --agent researcher --workspace ./researcher-workspace
-```
-
-Then use `POLIS_OPERATOR_TOKEN=dev-operator nix run .#polisctl -- ...` from a
-third terminal. Any configured runtime executable must be available in the
-worker's environment. The companion local deployment repository provides the
-tested k3s workflow and a worker image with the Pi runtime already installed.
+`make manifests` regenerates the CRD and RBAC from Kubebuilder markers;
+`make generate` regenerates DeepCopy methods. Generated files are committed so
+deployment consumers do not need the Go toolchain. The companion local
+deployment repository pins this repository as a flake input and provides the
+tested k3s overlay and live smoke tests.
 
 The Pi and demo worker images are intentionally separate. Each dedicated worker
 image must contain the runtime executable configured for its one agent. The

@@ -29,7 +29,6 @@ func New(st *store.Store, logger *slog.Logger, operatorToken, workerToken string
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
-	mux.Handle("PUT /v1/agents/{id}", s.requireOperator(http.HandlerFunc(s.applyAgent)))
 	mux.Handle("GET /v1/agents", s.requireOperator(http.HandlerFunc(s.listAgents)))
 	mux.Handle("GET /v1/agents/{id}", s.requireOperator(http.HandlerFunc(s.getAgent)))
 	mux.Handle("PUT /v1/agents/{id}/state", s.requireOperator(http.HandlerFunc(s.setState)))
@@ -68,20 +67,6 @@ func requireToken(expected, role string, next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-type agentConfigurationRequest struct {
-	Charter string   `json:"charter"`
-	Runtime []string `json:"runtime"`
-}
-
-func (s *Server) applyAgent(w http.ResponseWriter, r *http.Request) {
-	var request agentConfigurationRequest
-	if !decode(w, r, &request) {
-		return
-	}
-	agent, err := s.store.ApplyAgent(r.PathValue("id"), request.Charter, request.Runtime, "operator")
-	respond(w, http.StatusOK, agent, err)
 }
 
 func (s *Server) listAgents(w http.ResponseWriter, _ *http.Request) {

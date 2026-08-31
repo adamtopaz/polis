@@ -46,12 +46,6 @@ func NewWorker(baseURL, token string) *Client {
 	return client
 }
 
-func (c *Client) ApplyAgent(ctx context.Context, id, charter string, runtime []string) (model.Agent, error) {
-	var agent model.Agent
-	err := c.do(ctx, http.MethodPut, "/v1/agents/"+id, c.operatorToken, map[string]any{"charter": charter, "runtime": runtime}, &agent)
-	return agent, err
-}
-
 func (c *Client) ListAgents(ctx context.Context) ([]model.Agent, error) {
 	var response struct {
 		Items []model.Agent `json:"items"`

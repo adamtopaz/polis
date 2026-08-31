@@ -21,7 +21,7 @@
           pname = "polis-programs";
           version = "0.1.0";
           src = self;
-          vendorHash = "sha256-sZ2i3aCVufv5d2/NWb2OpM7/omEo1RmVmfOou+WyVKM=";
+          vendorHash = "sha256-R48t/8qePdgu2OfFCqT36i35Ezql0KuLnaf4QUeVk0E=";
           subPackages = [
             "./cmd/polis"
             "./cmd/polisctl"
@@ -157,7 +157,7 @@
                   "org.opencontainers.image.source" = "https://github.com/adamtopaz/polis";
                 };
                 User = "10001:10001";
-                WorkingDir = "/workspaces";
+                WorkingDir = "/workspace";
               };
             };
         in
@@ -171,6 +171,9 @@
             ;
           demo-agent = demoAgent;
           pi-runtime = piRuntime;
+          manifests = pkgs.runCommand "polis-kubernetes-manifests" { nativeBuildInputs = [ pkgs.kubectl ]; } ''
+            kubectl kustomize ${self}/config/default > $out
+          '';
           container = pkgs.dockerTools.buildLayeredImage {
             name = "polis";
             tag = "dev";
@@ -250,6 +253,9 @@
             actionlint .github/workflows/*.yml
             touch $out
           '';
+          manifests = pkgs.runCommand "polis-kubernetes-manifests-check" { nativeBuildInputs = [ pkgs.kubectl ]; } ''
+            kubectl kustomize ${self}/config/default > $out
+          '';
         }
       );
 
@@ -303,6 +309,9 @@
               pkgs.gopls
               pkgs.gotools
               pkgs.jq
+              pkgs.kubebuilder
+              pkgs.kubectl
+              pkgs.kustomize
               pkgs.nodejs_22
             ];
           };

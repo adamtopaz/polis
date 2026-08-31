@@ -1,0 +1,15 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: polis-controller
+  labels:
+    app.kubernetes.io/name: polis
+    app.kubernetes.io/component: controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: polis-controller
+subjects:
+  - kind: ServiceAccount
+    name: polis-controller
+    namespace: polis

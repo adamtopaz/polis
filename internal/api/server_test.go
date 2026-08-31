@@ -73,12 +73,25 @@ func TestHTTPAgentLifecycle(t *testing.T) {
 	if removedCreateResponse.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("removed create route returned %d", removedCreateResponse.StatusCode)
 	}
-	agent, err := api.ApplyAgent(ctx, "http-agent", "Act autonomously.", []string{"runtime"})
+	agent, err := database.ApplyAgent("http-agent", "Act autonomously.", []string{"runtime"}, "kubernetes:polis/http-agent")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if agent.Phase != "ready" {
 		t.Fatalf("created agent phase = %q", agent.Phase)
+	}
+	removedApplyRequest, err := http.NewRequestWithContext(ctx, http.MethodPut, server.URL+"/v1/agents/http-agent", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removedApplyRequest.Header.Set("Authorization", "Bearer operator-secret")
+	removedApplyResponse, err := http.DefaultClient.Do(removedApplyRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removedApplyResponse.Body.Close()
+	if removedApplyResponse.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("removed apply route returned %d", removedApplyResponse.StatusCode)
 	}
 	if _, _, err := client.New(server.URL).Acquire(ctx, "http-agent", "test-worker", 30*time.Second, 0); err == nil {
 		t.Fatal("worker acquire accepted no token")

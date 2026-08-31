@@ -1,0 +1,19 @@
+apiVersion: polis.dev/v1alpha1
+kind: Agent
+metadata:
+  name: sample
+spec:
+  charter: Pursue useful work and wait for durable mailbox triggers.
+  runtime:
+    image: ghcr.io/adamtopaz/polis-pi:main
+    command:
+      - /bin/polis-pi-agent
+  volumeClaimTemplates:
+    - metadata:
+        name: workspace
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 1Gi
