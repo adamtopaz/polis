@@ -105,7 +105,6 @@ func TestAgentCLIRejectsNonAgentCommands(t *testing.T) {
 		{"events"},
 		{"server"},
 		{"worker"},
-		{"demo-agent"},
 		{"self", "inspect"},
 		{"spawn"},
 		{"schedule", "1h", `{}`},

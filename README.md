@@ -42,7 +42,6 @@ The reported phase is derived rather than commanded:
 | --- | --- |
 | `ready` | Active and waiting for its dedicated worker to acquire it. |
 | `running` | A worker owns a live incarnation lease. |
-| `backoff` | Active, but waiting briefly after an incarnation exited. |
 | `paused` | Desired state is paused. |
 | `terminated` | Desired state is terminated. |
 
@@ -59,7 +58,6 @@ Work begins when an operator or an agent supplies a message.
 | `polis-controller` | Infrastructure | Runs the Kubebuilder controller manager, stores runtime state, and serves the mailbox HTTP API. |
 | `polis-worker` | Infrastructure | Is pinned to one agent and supervises its runtime process. |
 | `polis-pi-agent` | Agent runtime | Persistent TypeScript runtime built directly on the Pi SDK. |
-| `polis-demo-agent` | Tests | Deterministic persistent runtime distributed only in the demo worker image; it is not an AI agent. |
 
 The controller stores agent records, mailboxes, journals, and fenced leases in
 one bbolt database. A worker requests only its configured
@@ -258,8 +256,9 @@ spec:
 model is specified, Pi restores the session model or selects an available one.
 
 Provider API-key variables may be inherited by the runtime. Alternatively,
-`POLIS_PI_AUTH_FILE` may point to an existing Pi `auth.json`; the file must be
-writable because Pi can refresh OAuth credentials.
+`POLIS_PI_AUTH_FILE` may point to an existing Pi `auth.json`; the runtime copies
+it into private temporary storage so Pi can refresh OAuth credentials without
+mutating the source.
 
 ## Delivery and recovery
 
@@ -297,9 +296,8 @@ Polis currently uses three deliberately small bearer-token boundaries:
 The worker can consume its credential from a temporary file before starting
 its agent runtime. Operator, worker, and supervisor identity variables are
 removed from the child environment and replaced with the leased incarnation's
-values. The controller image contains `polisctl`; both worker images
-contain the agent-facing `polis` but deliberately omit `polisctl`. The
-production Pi image contains no demo runtime code.
+values. The controller image contains `polisctl`; the worker image contains the
+agent-facing `polis` but deliberately omits `polisctl`.
 
 `/v1/agents` and `/v1/events` require the operator token.
 `/v1/worker/acquire` requires the worker token. Heartbeats, exits, and
@@ -320,7 +318,6 @@ npm --prefix runtime/pi test
 nix flake check
 nix build .#container
 nix build .#pi-container
-nix build .#demo-container
 ```
 
 The main flake outputs are:
@@ -331,12 +328,10 @@ The main flake outputs are:
 | `.#polisctl` | Operator CLI. |
 | `.#controller` | Controller process. |
 | `.#worker` | Worker process. |
-| `.#demo-agent` | Deterministic test runtime. |
 | `.#pi-runtime` | Persistent Pi SDK runtime. |
 | `.#manifests` | Rendered Kubebuilder/Kustomize installation bundle. |
 | `.#container` | Controller image containing `polis-controller` and `polisctl`. |
 | `.#pi-container` | Production `polis-pi` worker image containing only the Pi runtime. |
-| `.#demo-container` | `polis-demo` worker image containing only the deterministic demo runtime. |
 
 `make manifests` regenerates the CRD and RBAC from Kubebuilder markers;
 `make generate` regenerates DeepCopy methods. Generated files are committed so
@@ -344,9 +339,8 @@ deployment consumers do not need the Go toolchain. The companion local
 deployment repository pins this repository as a flake input and provides the
 tested k3s overlay and live smoke tests.
 
-The Pi and demo worker images are intentionally separate. Each dedicated worker
-image must contain the runtime executable configured for its one agent. The
-local k3s deployment uses the production Pi image.
+Each dedicated worker image must contain the runtime executable configured for
+its one agent. The local k3s deployment uses the production Pi image.
 
 ## Deliberate limits
 

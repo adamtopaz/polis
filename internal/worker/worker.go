@@ -16,6 +16,8 @@ import (
 	"github.com/adamtopaz/polis/internal/model"
 )
 
+const incarnationRetryDelay = 2 * time.Second
+
 type Config struct {
 	ControllerURL string
 	WorkerToken   string
@@ -72,6 +74,9 @@ func runAgent(ctx context.Context, config Config) error {
 		}
 		log.Info("incarnation acquired", "agent", lease.Agent.ID)
 		runIncarnation(ctx, api, config, lease, log)
+		if !wait(ctx, incarnationRetryDelay) {
+			return ctx.Err()
+		}
 	}
 	return ctx.Err()
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { mkdir, readFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import {
   createAgentSession,
@@ -43,8 +44,15 @@ async function main(): Promise<void> {
     readFile(config.charterPath, "utf8"),
     callPolis(() => polis.self(shutdown.signal)),
   ]);
+  const authPath = config.authFile === undefined
+    ? undefined
+    : path.join(os.tmpdir(), "polis-pi-auth.json");
+  if (authPath !== undefined && config.authFile !== undefined) {
+    await copyFile(config.authFile, authPath);
+    await chmod(authPath, 0o600);
+  }
   const modelRuntime = await ModelRuntime.create({
-    ...(config.authFile === undefined ? {} : { authPath: config.authFile }),
+    ...(authPath === undefined ? {} : { authPath }),
     modelsPath: path.join(config.agentDir, "models.json"),
     modelsStorePath: path.join(config.agentDir, "models-store.json"),
   });

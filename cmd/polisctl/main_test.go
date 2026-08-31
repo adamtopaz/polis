@@ -49,7 +49,6 @@ func TestOperatorCLIRejectsAgentAndInfrastructureCommands(t *testing.T) {
 		{"spawn"},
 		{"server"},
 		{"worker"},
-		{"demo-agent"},
 	} {
 		err := run(context.Background(), command)
 		if err == nil || !strings.Contains(err.Error(), "operator control CLI") {

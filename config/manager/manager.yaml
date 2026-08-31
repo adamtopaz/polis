@@ -36,7 +36,6 @@ spec:
           command:
             - /bin/polis-controller
           args:
-            - --kubernetes
             - --kubernetes-namespace=$(POD_NAMESPACE)
             - --health-probe-bind-address=:8081
             - --metrics-bind-address=0

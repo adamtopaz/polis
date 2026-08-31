@@ -12,7 +12,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  DEMO_IMAGE: ghcr.io/adamtopaz/polis-demo
   IMAGE: ghcr.io/adamtopaz/polis
   PI_IMAGE: ghcr.io/adamtopaz/polis-pi
 
@@ -40,13 +39,11 @@ jobs:
         run: |
           nix build .#container --out-link result-controller --print-build-logs
           nix build .#pi-container --out-link result-pi --print-build-logs
-          nix build .#demo-container --out-link result-demo --print-build-logs
 
       - name: Load container images
         run: |
           docker load --input result-controller
           docker load --input result-pi
-          docker load --input result-demo
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
@@ -61,11 +58,7 @@ jobs:
           docker tag polis:dev "$IMAGE:main"
           docker tag polis-pi:dev "$PI_IMAGE:$GITHUB_SHA"
           docker tag polis-pi:dev "$PI_IMAGE:main"
-          docker tag polis-demo:dev "$DEMO_IMAGE:$GITHUB_SHA"
-          docker tag polis-demo:dev "$DEMO_IMAGE:main"
           docker push "$IMAGE:$GITHUB_SHA"
           docker push "$IMAGE:main"
           docker push "$PI_IMAGE:$GITHUB_SHA"
           docker push "$PI_IMAGE:main"
-          docker push "$DEMO_IMAGE:$GITHUB_SHA"
-          docker push "$DEMO_IMAGE:main"

@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	controllermanager "sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	polisv1alpha1 "github.com/adamtopaz/polis/api/v1alpha1"
@@ -44,7 +45,6 @@ func run(ctx context.Context, args []string) error {
 	dbPath := flags.String("db", env("POLIS_DB_PATH", "./polis.db"), "database path")
 	operatorTokenFile := flags.String("operator-token-file", env("POLIS_OPERATOR_TOKEN_FILE", ""), "path to the operator token")
 	workerTokenFile := flags.String("worker-token-file", env("POLIS_WORKER_TOKEN_FILE", ""), "path to the worker token")
-	kubernetes := flags.Bool("kubernetes", envBool("POLIS_KUBERNETES", false), "run the Kubernetes Agent controller")
 	kubernetesNamespace := flags.String("kubernetes-namespace", env("POLIS_KUBERNETES_NAMESPACE", ""), "namespace to watch (empty watches all namespaces)")
 	healthProbeAddress := flags.String("health-probe-bind-address", env("POLIS_HEALTH_PROBE_ADDRESS", ":8081"), "controller-runtime health probe address")
 	metricsAddress := flags.String("metrics-bind-address", env("POLIS_METRICS_ADDRESS", "0"), "controller-runtime metrics address; 0 disables metrics")
@@ -73,41 +73,38 @@ func run(ctx context.Context, args []string) error {
 	defer database.Close()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	var manager ctrl.Manager
-	if *kubernetes {
-		scheme := runtime.NewScheme()
-		utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-		utilruntime.Must(polisv1alpha1.AddToScheme(scheme))
-		options := ctrl.Options{
-			Scheme:                 scheme,
-			Metrics:                metricsserver.Options{BindAddress: *metricsAddress},
-			HealthProbeBindAddress: *healthProbeAddress,
-			LeaderElection:         *leaderElection,
-			LeaderElectionID:       "polis-controller.polis.dev",
-		}
-		if *kubernetesNamespace != "" {
-			options.Cache = cache.Options{DefaultNamespaces: map[string]cache.Config{*kubernetesNamespace: {}}}
-		}
-		configuration, err := ctrl.GetConfig()
-		if err != nil {
-			return fmt.Errorf("load Kubernetes configuration: %w", err)
-		}
-		ctrl.SetLogger(zap.New(zap.UseDevMode(false)))
-		manager, err = ctrl.NewManager(configuration, options)
-		if err != nil {
-			return fmt.Errorf("create Kubernetes manager: %w", err)
-		}
-		if err := (&poliscontroller.AgentReconciler{
-			Client: manager.GetClient(), Scheme: manager.GetScheme(), Store: database,
-		}).SetupWithManager(manager); err != nil {
-			return fmt.Errorf("create Agent controller: %w", err)
-		}
-		if err := manager.AddHealthzCheck("healthz", healthz.Ping); err != nil {
-			return fmt.Errorf("add health check: %w", err)
-		}
-		if err := manager.AddReadyzCheck("readyz", healthz.Ping); err != nil {
-			return fmt.Errorf("add readiness check: %w", err)
-		}
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(polisv1alpha1.AddToScheme(scheme))
+	options := ctrl.Options{
+		Scheme:                 scheme,
+		Metrics:                metricsserver.Options{BindAddress: *metricsAddress},
+		HealthProbeBindAddress: *healthProbeAddress,
+		LeaderElection:         *leaderElection,
+		LeaderElectionID:       "polis-controller.polis.dev",
+	}
+	if *kubernetesNamespace != "" {
+		options.Cache = cache.Options{DefaultNamespaces: map[string]cache.Config{*kubernetesNamespace: {}}}
+	}
+	configuration, err := ctrl.GetConfig()
+	if err != nil {
+		return fmt.Errorf("load Kubernetes configuration: %w", err)
+	}
+	ctrl.SetLogger(zap.New(zap.UseDevMode(false)))
+	manager, err := ctrl.NewManager(configuration, options)
+	if err != nil {
+		return fmt.Errorf("create Kubernetes manager: %w", err)
+	}
+	if err := (&poliscontroller.AgentReconciler{
+		Client: manager.GetClient(), Scheme: manager.GetScheme(), Store: database,
+	}).SetupWithManager(manager); err != nil {
+		return fmt.Errorf("create Agent controller: %w", err)
+	}
+	if err := manager.AddHealthzCheck("healthz", healthz.Ping); err != nil {
+		return fmt.Errorf("add health check: %w", err)
+	}
+	if err := manager.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+		return fmt.Errorf("add readiness check: %w", err)
 	}
 	server := &http.Server{
 		Addr:              *listen,
@@ -115,55 +112,34 @@ func run(ctx context.Context, args []string) error {
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	runContext, cancel := context.WithCancel(ctx)
-	defer cancel()
-	type componentResult struct {
-		name string
-		err  error
-	}
-	components := 1
-	result := make(chan componentResult, 2)
-	go func() {
-		logger.Info("controller listening", "address", *listen, "database", *dbPath)
-		result <- componentResult{name: "HTTP server", err: server.ListenAndServe()}
-	}()
-	if manager != nil {
-		components++
+	if err := manager.Add(controllermanager.RunnableFunc(func(ctx context.Context) error {
+		result := make(chan error, 1)
 		go func() {
-			logger.Info("Kubernetes manager started", "namespace", *kubernetesNamespace)
-			result <- componentResult{name: "Kubernetes manager", err: manager.Start(runContext)}
+			logger.Info("controller listening", "address", *listen, "database", *dbPath)
+			result <- server.ListenAndServe()
 		}()
-	}
-
-	remaining := components
-	var failures []error
-	select {
-	case outcome := <-result:
-		remaining--
-		if outcome.err != nil && !errors.Is(outcome.err, http.ErrServerClosed) && !errors.Is(outcome.err, context.Canceled) {
-			failures = append(failures, fmt.Errorf("%s: %w", outcome.name, outcome.err))
-		}
-	case <-ctx.Done():
-	}
-	cancel()
-	shutdown, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := server.Shutdown(shutdown); err != nil {
-		failures = append(failures, fmt.Errorf("shut down HTTP server: %w", err))
-	}
-	shutdownCancel()
-	for remaining > 0 {
 		select {
-		case outcome := <-result:
-			remaining--
-			if outcome.err != nil && !errors.Is(outcome.err, http.ErrServerClosed) && !errors.Is(outcome.err, context.Canceled) {
-				failures = append(failures, fmt.Errorf("%s: %w", outcome.name, outcome.err))
+		case err := <-result:
+			if errors.Is(err, http.ErrServerClosed) {
+				return nil
 			}
-		case <-time.After(10 * time.Second):
-			failures = append(failures, errors.New("timed out stopping controller components"))
-			remaining = 0
+			return err
+		case <-ctx.Done():
 		}
+		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdown); err != nil {
+			return fmt.Errorf("shut down HTTP server: %w", err)
+		}
+		if err := <-result; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	})); err != nil {
+		return fmt.Errorf("add HTTP server: %w", err)
 	}
-	return errors.Join(failures...)
+	logger.Info("Kubernetes manager started", "namespace", *kubernetesNamespace)
+	return manager.Start(ctx)
 }
 
 func envBool(name string, fallback bool) bool {

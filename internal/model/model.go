@@ -23,7 +23,6 @@ type Agent struct {
 	Runtime        []string   `json:"runtime"`
 	State          State      `json:"state"`
 	Phase          string     `json:"phase"`
-	WakeAt         *time.Time `json:"wake_at,omitempty"`
 	LeaseOwner     string     `json:"lease_owner,omitempty"`
 	LeaseExpiresAt *time.Time `json:"lease_expires_at,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`

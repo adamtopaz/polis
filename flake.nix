@@ -27,7 +27,6 @@
             "./cmd/polisctl"
             "./cmd/polis-controller"
             "./cmd/polis-worker"
-            "./cmd/polis-demo-agent"
           ];
 
           ldflags = [
@@ -112,7 +111,6 @@
           polisctl = programFor system "polisctl" "Operator control CLI for Polis";
           controller = programFor system "polis-controller" "Polis controller";
           worker = programFor system "polis-worker" "Polis worker";
-          demoAgent = programFor system "polis-demo-agent" "Deterministic Polis test agent";
           piRuntime = piRuntimeFor system;
           workerContainer =
             {
@@ -169,7 +167,6 @@
             controller
             worker
             ;
-          demo-agent = demoAgent;
           pi-runtime = piRuntime;
           manifests = pkgs.runCommand "polis-kubernetes-manifests" { nativeBuildInputs = [ pkgs.kubectl ]; } ''
             kubectl kustomize ${self}/config/default > $out
@@ -223,11 +220,6 @@
             ];
             extraEnv = [ "NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-bundle.crt" ];
           };
-          demo-container = workerContainer {
-            name = "polis-demo";
-            description = "Polis worker with the deterministic demo runtime";
-            runtimeContents = [ demoAgent ];
-          };
         }
       );
 
@@ -266,7 +258,6 @@
           polisctl = programFor system "polisctl" "Operator control CLI for Polis";
           controller = programFor system "polis-controller" "Polis controller";
           worker = programFor system "polis-worker" "Polis worker";
-          demoAgent = programFor system "polis-demo-agent" "Deterministic Polis test agent";
         in
         {
           default = {
@@ -288,10 +279,6 @@
           worker = {
             type = "app";
             program = "${worker}/bin/polis-worker";
-          };
-          demo-agent = {
-            type = "app";
-            program = "${demoAgent}/bin/polis-demo-agent";
           };
         }
       );

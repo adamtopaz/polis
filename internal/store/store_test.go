@@ -229,9 +229,8 @@ func TestReportedExitPreservesUnreadMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertPhase(t, agent, "backoff")
+	assertPhase(t, agent, "ready")
 
-	now = now.Add(5 * time.Second)
 	second, err := st.Acquire("alpha", "worker-2", 30*time.Second)
 	if err != nil {
 		t.Fatal(err)

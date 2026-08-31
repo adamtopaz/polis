@@ -38,7 +38,6 @@ type agentRecord struct {
 	Charter        string      `json:"charter"`
 	Runtime        []string    `json:"runtime"`
 	State          model.State `json:"state"`
-	WakeAt         *time.Time  `json:"wake_at,omitempty"`
 	LeaseOwner     string      `json:"lease_owner,omitempty"`
 	LeaseToken     string      `json:"lease_token,omitempty"`
 	LeaseExpiresAt *time.Time  `json:"lease_expires_at,omitempty"`
@@ -162,9 +161,6 @@ func (s *Store) SetState(id string, state model.State, actor string) (model.Agen
 		clearLease(tx, &record)
 		record.State = state
 		record.UpdatedAt = now
-		if state == model.StateActive {
-			record.WakeAt = nil
-		}
 		if err := putRecord(tx.Bucket(bucketAgents), id, record); err != nil {
 			return err
 		}
@@ -191,7 +187,7 @@ func (s *Store) Acquire(agentID, worker string, ttl time.Duration) (model.Lease,
 		if err := getRecord(agents, agentID, &record); err != nil {
 			return err
 		}
-		if record.State != model.StateActive || (record.WakeAt != nil && record.WakeAt.After(now)) ||
+		if record.State != model.StateActive ||
 			(record.LeaseExpiresAt != nil && record.LeaseExpiresAt.After(now)) {
 			return ErrNoAgent
 		}
@@ -201,7 +197,6 @@ func (s *Store) Acquire(agentID, worker string, ttl time.Duration) (model.Lease,
 		record.LeaseOwner = worker
 		record.LeaseToken = token
 		record.LeaseExpiresAt = &expires
-		record.WakeAt = nil
 		record.UpdatedAt = now
 		if err := putRecord(agents, record.ID, record); err != nil {
 			return err
@@ -271,14 +266,6 @@ func (s *Store) Exit(token, detail string) error {
 		}
 		worker := record.LeaseOwner
 		clearLease(tx, &record)
-		if record.State == model.StateActive {
-			delay := time.Second
-			if detail != "" {
-				delay = 5 * time.Second
-			}
-			wake := now.Add(delay)
-			record.WakeAt = &wake
-		}
 		record.UpdatedAt = now
 		if err := putRecord(tx.Bucket(bucketAgents), record.ID, record); err != nil {
 			return err
@@ -316,13 +303,6 @@ func (s *Store) SendMessage(agentID, sender string, body json.RawMessage) (model
 		message, err = appendMessage(tx, agentID, sender, body, now)
 		if err != nil {
 			return err
-		}
-		if record.State == model.StateActive && record.WakeAt != nil {
-			record.WakeAt = nil
-			record.UpdatedAt = now
-			if err := putRecord(tx.Bucket(bucketAgents), agentID, record); err != nil {
-				return err
-			}
 		}
 		return appendEvent(tx, model.Event{AgentID: agentID, Actor: sender, Kind: "message.sent", Data: mustJSON(map[string]any{"message_id": message.ID}), CreatedAt: now})
 	})
@@ -440,15 +420,13 @@ func publicAgent(record agentRecord, now time.Time) model.Agent {
 			phase = "running"
 			leaseOwner = record.LeaseOwner
 			leaseExpiresAt = record.LeaseExpiresAt
-		case record.WakeAt != nil && record.WakeAt.After(now):
-			phase = "backoff"
 		default:
 			phase = "ready"
 		}
 	}
 	return model.Agent{
 		ID: record.ID, Charter: record.Charter, Runtime: append([]string(nil), record.Runtime...), State: record.State,
-		Phase: phase, WakeAt: record.WakeAt, LeaseOwner: leaseOwner, LeaseExpiresAt: leaseExpiresAt,
+		Phase: phase, LeaseOwner: leaseOwner, LeaseExpiresAt: leaseExpiresAt,
 		CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt,
 	}
 }
