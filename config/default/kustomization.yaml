@@ -6,9 +6,9 @@ resources:
   - ../crd
   - ../rbac
   - ../storage
+  - ../mailbox
   - ../manager
-  - ../service
 images:
-  - name: controller
+  - name: polis-infrastructure
     newName: ghcr.io/adamtopaz/polis
     newTag: main

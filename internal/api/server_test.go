@@ -73,13 +73,6 @@ func TestHTTPAgentLifecycle(t *testing.T) {
 	if removedCreateResponse.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("removed create route returned %d", removedCreateResponse.StatusCode)
 	}
-	agent, err := database.ApplyAgent("http-agent", "Act autonomously.", []string{"runtime"}, "kubernetes:polis/http-agent")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if agent.Phase != "ready" {
-		t.Fatalf("created agent phase = %q", agent.Phase)
-	}
 	removedApplyRequest, err := http.NewRequestWithContext(ctx, http.MethodPut, server.URL+"/v1/agents/http-agent", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -139,7 +132,7 @@ func TestHTTPAgentLifecycle(t *testing.T) {
 			t.Fatalf("removed self route %s returned %d", path, response.StatusCode)
 		}
 	}
-	agent, err = api.SetState(ctx, "http-agent", model.StateTerminated)
+	agent, err := api.SetState(ctx, "http-agent", model.StateTerminated)
 	if err != nil || agent.State != model.StateTerminated {
 		t.Fatalf("terminated agent = %#v, %v", agent, err)
 	}

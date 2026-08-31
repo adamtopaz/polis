@@ -24,14 +24,12 @@ spec:
       serviceAccountName: polis-controller
       terminationGracePeriodSeconds: 30
       securityContext:
-        fsGroup: 10001
-        fsGroupChangePolicy: OnRootMismatch
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: controller
-          image: controller:latest
+          image: polis-infrastructure:latest
           imagePullPolicy: Always
           command:
             - /bin/polis-controller
@@ -44,15 +42,7 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            - name: POLIS_DB_PATH
-              value: /data/polis-v1.db
-            - name: POLIS_OPERATOR_TOKEN_FILE
-              value: /run/secrets/polis/operator-token
-            - name: POLIS_WORKER_TOKEN_FILE
-              value: /run/secrets/polis-worker/token
           ports:
-            - name: http
-              containerPort: 8080
             - name: health
               containerPort: 8081
           livenessProbe:
@@ -84,34 +74,3 @@ spec:
             runAsUser: 10001
             seccompProfile:
               type: RuntimeDefault
-          volumeMounts:
-            - name: data
-              mountPath: /data
-            - name: operator-token
-              mountPath: /run/secrets/polis
-              readOnly: true
-            - name: worker-token
-              mountPath: /run/secrets/polis-worker
-              readOnly: true
-            - name: tmp
-              mountPath: /tmp
-      volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: polis-data
-        - name: operator-token
-          secret:
-            secretName: polis-operator
-            defaultMode: 0440
-            items:
-              - key: token
-                path: operator-token
-        - name: worker-token
-          secret:
-            secretName: polis-worker
-            defaultMode: 0440
-            items:
-              - key: token
-                path: token
-        - name: tmp
-          emptyDir: {}

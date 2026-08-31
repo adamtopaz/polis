@@ -19,10 +19,12 @@ import (
 const incarnationRetryDelay = 2 * time.Second
 
 type Config struct {
-	ControllerURL string
+	MailboxURL    string
 	WorkerToken   string
 	AgentID       string
 	ID            string
+	Charter       string
+	Runtime       []string
 	Workspace     string
 	LeaseDuration time.Duration
 	ShutdownGrace time.Duration
@@ -38,6 +40,12 @@ func Run(ctx context.Context, config Config) error {
 	}
 	if config.AgentID == "" {
 		return errors.New("agent id is required")
+	}
+	if strings.TrimSpace(config.Charter) == "" {
+		return errors.New("charter is required")
+	}
+	if len(config.Runtime) == 0 || config.Runtime[0] == "" {
+		return errors.New("runtime command is required")
 	}
 	if config.LeaseDuration < 5*time.Second {
 		return errors.New("lease duration must be at least 5s")
@@ -55,7 +63,7 @@ func Run(ctx context.Context, config Config) error {
 }
 
 func runAgent(ctx context.Context, config Config) error {
-	api := client.NewWorker(config.ControllerURL, config.WorkerToken)
+	api := client.NewWorker(config.MailboxURL, config.WorkerToken)
 	log := config.Logger.With("worker", config.ID, "agent", config.AgentID)
 	for ctx.Err() == nil {
 		lease, ok, err := api.Acquire(ctx, config.AgentID, config.ID, config.LeaseDuration, 20*time.Second)
@@ -89,15 +97,15 @@ func runIncarnation(parent context.Context, api *client.Client, config Config, l
 		return
 	}
 	charterPath := filepath.Join(metadata, "charter.md")
-	if err := os.WriteFile(charterPath, []byte(lease.Agent.Charter+"\n"), 0o640); err != nil {
+	if err := os.WriteFile(charterPath, []byte(config.Charter+"\n"), 0o640); err != nil {
 		reportExit(api, lease.Token, "write charter: "+err.Error(), log)
 		return
 	}
 
-	command := exec.Command(lease.Agent.Runtime[0], lease.Agent.Runtime[1:]...)
+	command := exec.Command(config.Runtime[0], config.Runtime[1:]...)
 	command.Dir = workspace
 	command.Env = append(withoutControlPlaneCredentials(os.Environ()),
-		"POLIS_URL="+config.ControllerURL,
+		"POLIS_URL="+config.MailboxURL,
 		"POLIS_AGENT_ID="+lease.Agent.ID,
 		"POLIS_AGENT_TOKEN="+lease.Token,
 		"POLIS_WORKSPACE="+workspace,
@@ -143,7 +151,7 @@ func runIncarnation(parent context.Context, api *client.Client, config Config, l
 			}
 			if !heartbeat.Continue {
 				stop(command, done, config.ShutdownGrace)
-				log.Info("incarnation stopped by controller", "agent", lease.Agent.ID)
+				log.Info("incarnation stopped by mailbox", "agent", lease.Agent.ID)
 				return
 			}
 			resetTimer(deadline, time.Until(heartbeat.ExpiresAt))
@@ -168,6 +176,7 @@ func withoutControlPlaneCredentials(environment []string) []string {
 			strings.HasPrefix(variable, "POLIS_WORKER_TOKEN_FILE=") ||
 			strings.HasPrefix(variable, "POLIS_AGENT_ID=") ||
 			strings.HasPrefix(variable, "POLIS_AGENT_TOKEN=") ||
+			strings.HasPrefix(variable, "POLIS_CHARTER=") ||
 			strings.HasPrefix(variable, "POLIS_WORKSPACE=") ||
 			strings.HasPrefix(variable, "POLIS_CHARTER_PATH=") {
 			continue

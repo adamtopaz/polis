@@ -51,7 +51,7 @@ func runAgent(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "list":
 		flags := flag.NewFlagSet("agent list", flag.ContinueOnError)
-		url := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "controller URL")
+		url := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "mailbox URL")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -63,7 +63,7 @@ func runAgent(ctx context.Context, args []string) error {
 		return printJSON(map[string]any{"items": agents}, err)
 	case "get":
 		flags := flag.NewFlagSet("agent get", flag.ContinueOnError)
-		url := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "controller URL")
+		url := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "mailbox URL")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -78,7 +78,7 @@ func runAgent(ctx context.Context, args []string) error {
 		return printJSON(agent, err)
 	case "state":
 		flags := flag.NewFlagSet("agent state", flag.ContinueOnError)
-		url := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "controller URL")
+		url := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "mailbox URL")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -98,7 +98,7 @@ func runAgent(ctx context.Context, args []string) error {
 
 func runMessage(ctx context.Context, args []string) error {
 	flags := flag.NewFlagSet("message", flag.ContinueOnError)
-	url := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "controller URL")
+	url := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "mailbox URL")
 	sender := flags.String("sender", "operator", "sender label")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -120,7 +120,7 @@ func runMessage(ctx context.Context, args []string) error {
 
 func runEvents(ctx context.Context, args []string) error {
 	flags := flag.NewFlagSet("events", flag.ContinueOnError)
-	url := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "controller URL")
+	url := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "mailbox URL")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}

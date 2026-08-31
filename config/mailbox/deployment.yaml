@@ -1,0 +1,102 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: polis-mailbox
+  labels:
+    app.kubernetes.io/name: polis
+    app.kubernetes.io/component: mailbox
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: polis
+      app.kubernetes.io/component: mailbox
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: mailbox
+      labels:
+        app.kubernetes.io/name: polis
+        app.kubernetes.io/component: mailbox
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mailbox
+          image: polis-infrastructure:latest
+          imagePullPolicy: Always
+          command:
+            - /bin/polis-mailbox
+          env:
+            - name: POLIS_DB_PATH
+              value: /data/polis-v1.db
+            - name: POLIS_OPERATOR_TOKEN_FILE
+              value: /run/secrets/polis/operator-token
+            - name: POLIS_WORKER_TOKEN_FILE
+              value: /run/secrets/polis-worker/token
+          ports:
+            - name: http
+              containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 3
+          resources:
+            requests:
+              cpu: 25m
+              memory: 48Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: operator-token
+              mountPath: /run/secrets/polis
+              readOnly: true
+            - name: worker-token
+              mountPath: /run/secrets/polis-worker
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: polis-data
+        - name: operator-token
+          secret:
+            secretName: polis-operator
+            defaultMode: 0440
+            items:
+              - key: token
+                path: operator-token
+        - name: worker-token
+          secret:
+            secretName: polis-worker
+            defaultMode: 0440
+            items:
+              - key: token
+                path: token

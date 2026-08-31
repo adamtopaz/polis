@@ -1,7 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { PolisApiError } from "./polis.js";
 
-export interface ControllerRetryOptions {
+export interface MailboxRetryOptions {
   signal: AbortSignal;
   delayMs?: number;
   now?: () => number;
@@ -10,9 +10,9 @@ export interface ControllerRetryOptions {
   onAvailable?: (unavailableMs: number) => void;
 }
 
-export async function withControllerRetry<T>(
+export async function withMailboxRetry<T>(
   operation: () => Promise<T>,
-  options: ControllerRetryOptions,
+  options: MailboxRetryOptions,
 ): Promise<T> {
   const delayMs = options.delayMs ?? 1_000;
   const now = options.now ?? Date.now;
@@ -27,7 +27,7 @@ export async function withControllerRetry<T>(
       }
       return result;
     } catch (error) {
-      if (options.signal.aborted || !isRetryableControllerError(error)) {
+      if (options.signal.aborted || !isRetryableMailboxError(error)) {
         throw error;
       }
       if (unavailableAt === undefined) {
@@ -39,7 +39,7 @@ export async function withControllerRetry<T>(
   }
 }
 
-export function isRetryableControllerError(error: unknown): boolean {
+export function isRetryableMailboxError(error: unknown): boolean {
   if (!(error instanceof PolisApiError)) {
     return error instanceof TypeError;
   }

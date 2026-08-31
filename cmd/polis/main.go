@@ -91,7 +91,7 @@ func run(ctx context.Context, args []string) error {
 
 func agentSession(name string, args []string) (*client.Client, string, []string, error) {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
-	url := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "controller URL")
+	url := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "mailbox URL")
 	if err := flags.Parse(args); err != nil {
 		return nil, "", nil, err
 	}

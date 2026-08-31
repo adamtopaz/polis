@@ -1,14 +1,14 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: polis-controller
+  name: polis-mailbox
   labels:
     app.kubernetes.io/name: polis
-    app.kubernetes.io/component: controller
+    app.kubernetes.io/component: mailbox
 spec:
   selector:
     app.kubernetes.io/name: polis
-    app.kubernetes.io/component: controller
+    app.kubernetes.io/component: mailbox
   ports:
     - name: http
       port: 80

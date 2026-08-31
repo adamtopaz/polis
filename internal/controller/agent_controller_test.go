@@ -18,7 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -35,19 +35,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	polisv1alpha1 "github.com/adamtopaz/polis/api/v1alpha1"
-	"github.com/adamtopaz/polis/internal/store"
 )
 
 func TestAgentReconcilerCreatesDedicatedRetainedTopology(t *testing.T) {
 	scheme := testScheme(t)
 	agent := testAgent()
 	client := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&polisv1alpha1.Agent{}).WithObjects(agent).Build()
-	database, err := store.Open(filepath.Join(t.TempDir(), "polis.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
-	reconciler := &AgentReconciler{Client: client, Scheme: scheme, Store: database}
+	reconciler := &AgentReconciler{Client: client, Scheme: scheme}
 	request := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: agent.Namespace, Name: agent.Name}}
 	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
 		t.Fatal(err)
@@ -73,6 +67,10 @@ func TestAgentReconcilerCreatesDedicatedRetainedTopology(t *testing.T) {
 	if container.Image != "ghcr.io/adamtopaz/polis-pi:main" || !hasVolumeMount(container.VolumeMounts, "workspace") || !hasVolumeMount(container.VolumeMounts, "shared-research") {
 		t.Fatalf("agent container = %#v", container)
 	}
+	if !slices.Equal(container.Args, []string{"--", "/bin/polis-pi-agent", "--thinking", "high"}) ||
+		envValue(container.Env, "POLIS_CHARTER") != agent.Spec.Charter || envValue(container.Env, "POLIS_URL") != "http://polis-mailbox" {
+		t.Fatalf("runtime configuration was not projected into the pod: %#v", container)
+	}
 	encoded, err := json.Marshal(deployment)
 	if err != nil {
 		t.Fatal(err)
@@ -96,13 +94,6 @@ func TestAgentReconcilerCreatesDedicatedRetainedTopology(t *testing.T) {
 	if len(reconciled.Status.Conditions) != 1 || reconciled.Status.Conditions[0].Status != metav1.ConditionTrue {
 		t.Fatalf("status = %#v", reconciled.Status)
 	}
-	record, err := database.GetAgent("researcher")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if record.Charter != agent.Spec.Charter || len(record.Runtime) != 3 {
-		t.Fatalf("Polis record = %#v", record)
-	}
 }
 
 func TestAgentReconcilerRejectsMultiplePersistentContainers(t *testing.T) {
@@ -110,12 +101,7 @@ func TestAgentReconcilerRejectsMultiplePersistentContainers(t *testing.T) {
 	agent := testAgent()
 	agent.Spec.PodTemplate.Spec.Containers = append(agent.Spec.PodTemplate.Spec.Containers, corev1.Container{Name: "second-agent"})
 	client := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&polisv1alpha1.Agent{}).WithObjects(agent).Build()
-	database, err := store.Open(filepath.Join(t.TempDir(), "polis.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
-	reconciler := &AgentReconciler{Client: client, Scheme: scheme, Store: database}
+	reconciler := &AgentReconciler{Client: client, Scheme: scheme}
 	request := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: agent.Namespace, Name: agent.Name}}
 	if _, err := reconciler.Reconcile(context.Background(), request); err == nil {
 		t.Fatal("invalid multi-agent pod was reconciled")
@@ -137,13 +123,8 @@ func TestAgentReconcilerRetriesDeploymentConflicts(t *testing.T) {
 	}}
 	base := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&polisv1alpha1.Agent{}).WithObjects(agent, stale).Build()
 	conflicting := &conflictOnceClient{Client: base}
-	database, err := store.Open(filepath.Join(t.TempDir(), "polis.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
 
-	reconciler := &AgentReconciler{Client: conflicting, Scheme: scheme, Store: database}
+	reconciler := &AgentReconciler{Client: conflicting, Scheme: scheme}
 	request := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: agent.Namespace, Name: agent.Name}}
 	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
 		t.Fatalf("reconcile did not absorb a transient Deployment conflict: %v", err)
@@ -225,4 +206,13 @@ func hasVolumeMount(mounts []corev1.VolumeMount, name string) bool {
 		}
 	}
 	return false
+}
+
+func envValue(environment []corev1.EnvVar, name string) string {
+	for _, variable := range environment {
+		if variable.Name == name {
+			return variable.Value
+		}
+	}
+	return ""
 }

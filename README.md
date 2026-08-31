@@ -26,7 +26,8 @@ understandable consistency model over premature scale machinery.
 An agent is a persistent logical identity, not an immortal Unix process. One
 dedicated worker supervises one incarnation of one declared agent. If the
 process, pod, or node disappears, the dedicated pod resumes the same identity,
-workspace, mailbox, and runtime configuration from its PVC.
+workspace, and mailbox from durable state, and the same runtime configuration
+from its `Agent` resource.
 
 Desired state belongs to the operator:
 
@@ -55,15 +56,21 @@ Work begins when an operator or an agent supplies a message.
 | --- | --- | --- |
 | `polis` | Agent runtime | Capability CLI for the current agent's mailbox, journal, and messaging. |
 | `polisctl` | Operator | Applies, inspects, messages, pauses, resumes, and terminates agents. |
-| `polis-controller` | Infrastructure | Runs the Kubebuilder controller manager, stores runtime state, and serves the mailbox HTTP API. |
+| `polis-controller` | Infrastructure | Runs the Kubebuilder controller manager and reconciles Agent pods and PVCs. |
+| `polis-mailbox` | Infrastructure | Serves messaging and coordination from its own durable database. |
 | `polis-worker` | Infrastructure | Is pinned to one agent and supervises its runtime process. |
 | `polis-pi-agent` | Agent runtime | Persistent TypeScript runtime built directly on the Pi SDK. |
 
-The controller stores agent records, mailboxes, journals, and fenced leases in
-one bbolt database. A worker requests only its configured
-agent ID and executes that agent's runtime argument vector directly in its
-mounted workspace. There is no intervening shell or workflow engine and no
-multi-agent worker mode.
+The mailbox stores dynamic agent records, messages, journals, and fenced leases
+in one bbolt database. The `Agent` custom resource remains the only desired
+configuration: the controller projects its charter and runtime argument vector
+into the dedicated worker pod. The mailbox never stores them. There is no
+intervening shell or workflow engine and no multi-agent worker mode.
+
+An authenticated worker registers its stable identity in the mailbox on its
+first lease acquisition. Consequently, `kubectl get agents.polis.dev` lists
+declared topology, while `polisctl agent list` lists identities that have
+connected to the mailbox at least once.
 
 Each runtime receives:
 
@@ -123,12 +130,12 @@ kubectl -n polis get agents.polis.dev,deployments,pods,pvc
 kubectl -n polis describe agents.polis.dev researcher
 ```
 
-The reconciler idempotently creates the Polis record, a retained
-`researcher-workspace` PVC, and exactly one `Recreate` Deployment with one
-agent container. It injects the worker command, mailbox connection, private
-workspace mount, and credential boundary. `podTemplate` preserves native pod
-settings such as resources, affinity, tolerations, init containers, shared PVC
-volumes, and volume mounts.
+The reconciler idempotently creates a retained `researcher-workspace` PVC and
+exactly one `Recreate` Deployment with one agent container. It injects the
+worker command, charter, runtime command, mailbox connection, private workspace
+mount, and credential boundary. `podTemplate` preserves native pod settings
+such as resources, affinity, tolerations, init containers, shared PVC volumes,
+and volume mounts.
 
 Private PVCs intentionally have no owner reference. Deleting an `Agent`
 garbage-collects its Deployment but retains its private claims and Polis
@@ -144,13 +151,13 @@ kubectl apply --server-side -k config/default
 ```
 
 It contains the CRD, controller Deployment and ServiceAccount, generated RBAC,
-mailbox Service, and controller PVC. Environment-specific Agent objects,
-credentials, storage classes, and shared claims belong in a deployment
+mailbox Deployment and Service, and mailbox PVC. Environment-specific Agent
+objects, credentials, storage classes, and shared claims belong in a deployment
 repository or overlay.
 
 ## Operator workflow
 
-`polisctl` is a normal Go executable. It reads the controller URL from
+`polisctl` is a normal Go executable. It reads the mailbox URL from
 `POLIS_URL` (default `http://localhost:8080`) and the operator credential from
 `POLIS_OPERATOR_TOKEN_FILE`, or from `POLIS_OPERATOR_TOKEN` for local
 development. Every command emits JSON. Agent configuration is intentionally
@@ -177,7 +184,7 @@ The full operator surface is:
 | Command | Effect |
 | --- | --- |
 | `polisctl agent list` | List all agents. |
-| `polisctl agent get ID` | Return one agent's configuration, desired state, phase, and current lease information. |
+| `polisctl agent get ID` | Return one agent's dynamic state, phase, and current lease information. |
 | `polisctl agent state ID active\|paused\|terminated` | Change desired state. Termination is irreversible. |
 | `polisctl message [--sender LABEL] ID JSON` | Append a durable message. The default sender is `operator`. |
 | `polisctl events [ID]` | Return fleet-wide events or only one agent's lifecycle and journal events. |
@@ -192,7 +199,7 @@ automatically and emits JSON.
 
 | Command | Effect |
 | --- | --- |
-| `polis inspect` | Return the current agent's identity, charter, runtime, state, phase, and lease information. |
+| `polis inspect` | Return the current agent's identity, state, phase, and lease information. |
 | `polis messages` | Return mailbox messages after the acknowledgement cursor. |
 | `polis ack MESSAGE_ID` | Acknowledge that message and every earlier message. The cursor cannot move backward. |
 | `polis send AGENT_ID JSON` | Send a durable message to any non-terminated agent, including yourself. |
@@ -273,15 +280,15 @@ work should inspect existing state and make consequential operations idempotent
 when practical.
 
 An idle restart does not cause an LLM turn. The replacement incarnation resumes
-the same workspace and most recent Pi session, then waits for a message. A brief
-controller outage is retried by a running Pi runtime. If the outage lasts past
-the lease deadline, the worker fences the runtime and a replacement resumes
-after the controller returns.
+the same workspace and most recent Pi session, then waits for a message. A
+controller outage does not interrupt existing agents or messaging. A mailbox
+outage is retried by a running Pi runtime; if it lasts past the lease deadline,
+the worker fences the runtime and reacquires after the mailbox returns.
 
 Completion is journaled before mailbox acknowledgement. If the lease is lost
 between those operations, the message remains available for retry. During a
-Kubernetes controller handoff, a replacement waits for the old process to
-release the bbolt file lock rather than entering a crash loop.
+mailbox handoff, a replacement waits for the old process to release the bbolt
+file lock rather than entering a crash loop.
 
 ## Security boundaries
 
@@ -289,15 +296,15 @@ Polis currently uses three deliberately small bearer-token boundaries:
 
 | Credential | Held by | Capability |
 | --- | --- | --- |
-| Operator token | `polisctl` and controller | Fleet administration and event inspection. |
-| Worker token | Controller and dedicated workers | Acquire the worker's declared agent lease. |
+| Operator token | `polisctl` and mailbox | Fleet administration and event inspection. |
+| Worker token | Mailbox and dedicated workers | Acquire the worker's declared agent lease. |
 | Incarnation token | One worker and its runtime | Act only as the leased agent while that lease is valid. |
 
 The worker can consume its credential from a temporary file before starting
 its agent runtime. Operator, worker, and supervisor identity variables are
 removed from the child environment and replaced with the leased incarnation's
-values. The controller image contains `polisctl`; the worker image contains the
-agent-facing `polis` but deliberately omits `polisctl`.
+values. The infrastructure image contains `polisctl`; the worker image contains
+the agent-facing `polis` but deliberately omits `polisctl`.
 
 `/v1/agents` and `/v1/events` require the operator token.
 `/v1/worker/acquire` requires the worker token. Heartbeats, exits, and
@@ -327,10 +334,11 @@ The main flake outputs are:
 | `.#polis` | Agent capability CLI. |
 | `.#polisctl` | Operator CLI. |
 | `.#controller` | Controller process. |
+| `.#mailbox` | Mailbox process. |
 | `.#worker` | Worker process. |
 | `.#pi-runtime` | Persistent Pi SDK runtime. |
 | `.#manifests` | Rendered Kubebuilder/Kustomize installation bundle. |
-| `.#container` | Controller image containing `polis-controller` and `polisctl`. |
+| `.#container` | Infrastructure image containing `polis-controller`, `polis-mailbox`, and `polisctl`. |
 | `.#pi-container` | Production `polis-pi` worker image containing only the Pi runtime. |
 
 `make manifests` regenerates the CRD and RBAC from Kubebuilder markers;
@@ -344,8 +352,7 @@ its one agent. The local k3s deployment uses the production Pi image.
 
 ## Deliberate limits
 
-- The controller is one bbolt writer, not a highly available replicated
-  service.
+- The mailbox is one bbolt writer, not a highly available replicated service.
 - Every declared agent has its own pod and private PVC, even while waiting
   without making LLM calls.
 - Shared folders use ordinary Kubernetes PVCs and volume mounts. Cross-node

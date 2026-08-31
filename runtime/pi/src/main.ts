@@ -13,7 +13,7 @@ import {
 import { loadConfig } from "./config.js";
 import { PolisApiError, PolisClient } from "./polis.js";
 import { polisSystemPrompt, polisTurnPrompt } from "./prompt.js";
-import { withControllerRetry } from "./retry.js";
+import { withMailboxRetry } from "./retry.js";
 
 let stopping = false;
 let abortActiveSession: (() => Promise<void>) | undefined;
@@ -35,10 +35,10 @@ async function main(): Promise<void> {
   ]);
 
   const polis = new PolisClient(config.polisUrl, config.agentToken);
-  const callPolis = <T>(operation: () => Promise<T>): Promise<T> => withControllerRetry(operation, {
+  const callPolis = <T>(operation: () => Promise<T>): Promise<T> => withMailboxRetry(operation, {
     signal: shutdown.signal,
-    onUnavailable: (error) => log("controller.unavailable", { error: errorMessage(error) }),
-    onAvailable: (unavailableMs) => log("controller.available", { unavailable_ms: unavailableMs }),
+    onUnavailable: (error) => log("mailbox.unavailable", { error: errorMessage(error) }),
+    onAvailable: (unavailableMs) => log("mailbox.available", { unavailable_ms: unavailableMs }),
   });
   const [charter, agent] = await Promise.all([
     readFile(config.charterPath, "utf8"),

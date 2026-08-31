@@ -26,6 +26,7 @@
             "./cmd/polis"
             "./cmd/polisctl"
             "./cmd/polis-controller"
+            "./cmd/polis-mailbox"
             "./cmd/polis-worker"
           ];
 
@@ -110,6 +111,7 @@
           polis = programFor system "polis" "Agent capability CLI for Polis";
           polisctl = programFor system "polisctl" "Operator control CLI for Polis";
           controller = programFor system "polis-controller" "Polis controller";
+          mailbox = programFor system "polis-mailbox" "Polis mailbox service";
           worker = programFor system "polis-worker" "Polis worker";
           piRuntime = piRuntimeFor system;
           workerContainer =
@@ -165,6 +167,7 @@
             polis
             polisctl
             controller
+            mailbox
             worker
             ;
           pi-runtime = piRuntime;
@@ -176,6 +179,7 @@
             tag = "dev";
             contents = [
               controller
+              mailbox
               polisctl
               pkgs.cacert
               pkgs.tini
@@ -188,11 +192,9 @@
               ];
               Env = [
                 "PATH=/bin"
-                "POLIS_DB_PATH=/data/polis.db"
               ];
-              ExposedPorts."8080/tcp" = { };
               Labels = {
-                "org.opencontainers.image.description" = "Polis autonomous-agent lifecycle kernel";
+                "org.opencontainers.image.description" = "Polis controller and mailbox services";
                 "org.opencontainers.image.revision" =
                   if self ? rev then
                     self.rev
@@ -257,6 +259,7 @@
           polis = programFor system "polis" "Agent capability CLI for Polis";
           polisctl = programFor system "polisctl" "Operator control CLI for Polis";
           controller = programFor system "polis-controller" "Polis controller";
+          mailbox = programFor system "polis-mailbox" "Polis mailbox service";
           worker = programFor system "polis-worker" "Polis worker";
         in
         {
@@ -275,6 +278,10 @@
           controller = {
             type = "app";
             program = "${controller}/bin/polis-controller";
+          };
+          mailbox = {
+            type = "app";
+            program = "${mailbox}/bin/polis-mailbox";
           };
           worker = {
             type = "app";

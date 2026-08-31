@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/adamtopaz/polis/internal/api"
 	"github.com/adamtopaz/polis/internal/store"
@@ -25,7 +26,11 @@ func TestOperatorCommands(t *testing.T) {
 	t.Setenv("POLIS_URL", server.URL)
 	t.Setenv("POLIS_OPERATOR_TOKEN", "operator-secret")
 	t.Setenv("POLIS_OPERATOR_TOKEN_FILE", "")
-	if _, err := database.ApplyAgent("declared", "Persist.", []string{"runtime"}, "kubernetes:polis/declared"); err != nil {
+	lease, err := database.Acquire("declared", "worker", 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Exit(lease.Token, "registered"); err != nil {
 		t.Fatal(err)
 	}
 	commands := [][]string{

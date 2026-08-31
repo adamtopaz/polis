@@ -19,8 +19,6 @@ func (s State) Valid() bool {
 
 type Agent struct {
 	ID             string     `json:"id"`
-	Charter        string     `json:"charter"`
-	Runtime        []string   `json:"runtime"`
 	State          State      `json:"state"`
 	Phase          string     `json:"phase"`
 	LeaseOwner     string     `json:"lease_owner,omitempty"`

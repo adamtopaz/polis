@@ -40,7 +40,6 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	polisv1alpha1 "github.com/adamtopaz/polis/api/v1alpha1"
-	"github.com/adamtopaz/polis/internal/store"
 )
 
 const (
@@ -54,17 +53,16 @@ var (
 	dnsLabel        = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 	reservedVolumes = []string{"workspace", "tmp", "worker-auth-source", "worker-auth"}
 	reservedEnv     = []string{
-		"POLIS_URL", "POLIS_AGENT_ID", "POLIS_WORKSPACE", "POLIS_LEASE_DURATION",
+		"POLIS_URL", "POLIS_AGENT_ID", "POLIS_CHARTER", "POLIS_WORKSPACE", "POLIS_LEASE_DURATION",
 		"POLIS_SHUTDOWN_GRACE", "POLIS_WORKER_TOKEN", "POLIS_WORKER_TOKEN_FILE",
 	}
 )
 
 type AgentReconciler struct {
 	client.Client
-	Scheme        *runtime.Scheme
-	Store         *store.Store
-	ControllerURL string
-	WorkerSecret  string
+	Scheme       *runtime.Scheme
+	MailboxURL   string
+	WorkerSecret string
 }
 
 // +kubebuilder:rbac:groups=polis.dev,resources=agents,verbs=get;list;watch;create;update;patch;delete
@@ -97,15 +95,6 @@ func (r *AgentReconciler) reconcile(ctx context.Context, agent *polisv1alpha1.Ag
 	if err != nil {
 		return nil, err
 	}
-	if _, err := r.Store.ApplyAgent(
-		agent.Name,
-		agent.Spec.Charter,
-		agent.Spec.Runtime.Command,
-		"kubernetes:"+agent.Namespace+"/"+agent.Name,
-	); err != nil {
-		return nil, fmt.Errorf("apply Polis record: %w", err)
-	}
-
 	for i := range agent.Spec.VolumeClaimTemplates {
 		if err := r.reconcileClaim(ctx, agent, &agent.Spec.VolumeClaimTemplates[i], claimNames[i]); err != nil {
 			return nil, err
@@ -195,6 +184,7 @@ func (r *AgentReconciler) podTemplate(agent *polisv1alpha1.Agent, templateNames,
 	}
 	container.Name = "agent"
 	container.Image = agent.Spec.Runtime.Image
+	container.Args = append([]string{"--"}, agent.Spec.Runtime.Command...)
 	if container.ImagePullPolicy == "" {
 		container.ImagePullPolicy = corev1.PullAlways
 	}
@@ -209,8 +199,9 @@ func (r *AgentReconciler) podTemplate(agent *polisv1alpha1.Agent, templateNames,
 		container.SecurityContext = restrictedSecurityContext()
 	}
 	container.Env = appendWithoutNamed(container.Env, reservedEnv,
-		corev1.EnvVar{Name: "POLIS_URL", Value: r.controllerURL()},
+		corev1.EnvVar{Name: "POLIS_URL", Value: r.mailboxURL()},
 		corev1.EnvVar{Name: "POLIS_AGENT_ID", Value: agent.Name},
+		corev1.EnvVar{Name: "POLIS_CHARTER", Value: agent.Spec.Charter},
 		corev1.EnvVar{Name: "POLIS_WORKSPACE", Value: workspacePath},
 		corev1.EnvVar{Name: "POLIS_LEASE_DURATION", Value: "30s"},
 		corev1.EnvVar{Name: "POLIS_SHUTDOWN_GRACE", Value: "10s"},
@@ -347,11 +338,11 @@ func (r *AgentReconciler) SetupWithManager(manager ctrl.Manager) error {
 		Complete(r)
 }
 
-func (r *AgentReconciler) controllerURL() string {
-	if r.ControllerURL != "" {
-		return r.ControllerURL
+func (r *AgentReconciler) mailboxURL() string {
+	if r.MailboxURL != "" {
+		return r.MailboxURL
 	}
-	return "http://polis-controller"
+	return "http://polis-mailbox"
 }
 
 func (r *AgentReconciler) workerSecret() string {

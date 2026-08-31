@@ -26,9 +26,10 @@ func main() {
 
 func run(ctx context.Context, args []string) error {
 	flags := flag.NewFlagSet("polis-worker", flag.ContinueOnError)
-	controllerURL := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "controller URL")
+	mailboxURL := flags.String("url", env("POLIS_URL", "http://localhost:8080"), "mailbox URL")
 	agentID := flags.String("agent", env("POLIS_AGENT_ID", ""), "agent id this worker exclusively supervises")
 	id := flags.String("id", env("POLIS_WORKER_ID", env("HOSTNAME", "worker")), "worker id")
+	charter := flags.String("charter", env("POLIS_CHARTER", ""), "stable agent charter")
 	workspace := flags.String("workspace", env("POLIS_WORKSPACE", "./workspace"), "durable agent workspace")
 	lease := flags.Duration("lease", envDuration("POLIS_LEASE_DURATION", 30*time.Second), "incarnation lease duration")
 	grace := flags.Duration("shutdown-grace", envDuration("POLIS_SHUTDOWN_GRACE", 10*time.Second), "runtime shutdown grace")
@@ -36,8 +37,8 @@ func run(ctx context.Context, args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if flags.NArg() != 0 {
-		return errors.New("polis-worker takes no positional arguments")
+	if flags.NArg() == 0 {
+		return errors.New("polis-worker requires a runtime command after --")
 	}
 	workerToken, err := token.Load("POLIS_WORKER_TOKEN", *workerTokenFile, "worker")
 	if err != nil {
@@ -50,10 +51,12 @@ func run(ctx context.Context, args []string) error {
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	return worker.Run(ctx, worker.Config{
-		ControllerURL: *controllerURL,
+		MailboxURL:    *mailboxURL,
 		WorkerToken:   workerToken,
 		AgentID:       *agentID,
 		ID:            *id,
+		Charter:       *charter,
+		Runtime:       flags.Args(),
 		Workspace:     *workspace,
 		LeaseDuration: *lease,
 		ShutdownGrace: *grace,

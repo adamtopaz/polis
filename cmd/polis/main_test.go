@@ -26,14 +26,15 @@ func TestAgentCommands(t *testing.T) {
 	server := httptest.NewServer(api.New(database, slog.New(slog.NewTextHandler(io.Discard, nil)), "operator-secret", "worker-secret").Handler())
 	defer server.Close()
 
-	if _, err := database.ApplyAgent("parent", "Act independently.", []string{"runtime"}, "operator"); err != nil {
-		t.Fatal(err)
-	}
 	lease, err := database.Acquire("parent", "worker", 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.ApplyAgent("y-target", "Receive messages.", []string{"runtime"}, "operator"); err != nil {
+	targetRegistration, err := database.Acquire("y-target", "target-worker", 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Exit(targetRegistration.Token, "registered"); err != nil {
 		t.Fatal(err)
 	}
 	message, err := database.SendMessage("parent", "operator", json.RawMessage(`{"hello":"parent"}`))

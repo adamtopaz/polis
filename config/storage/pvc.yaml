@@ -4,7 +4,7 @@ metadata:
   name: polis-data
   labels:
     app.kubernetes.io/name: polis
-    app.kubernetes.io/component: controller
+    app.kubernetes.io/component: mailbox
 spec:
   accessModes:
     - ReadWriteOnce

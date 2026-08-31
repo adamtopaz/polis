@@ -31,7 +31,7 @@ test("PolisClient handles empty success responses", async () => {
   await polis.acknowledge(1);
 });
 
-test("PolisClient exposes controller errors without leaking the token", async () => {
+test("PolisClient exposes mailbox errors without leaking the token", async () => {
   const polis = new PolisClient(
     "http://polis.test",
     "secret-token",
