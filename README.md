@@ -196,11 +196,19 @@ in a deployment repository or overlay.
 
 ## Operator workflow
 
-`polisctl` is a normal Go executable. It reads the mailbox URL from
+`polisctl` is a normal Go executable. Mailbox commands read the URL from
 `POLIS_URL` (default `http://localhost:8080`) and the operator credential from
 `POLIS_OPERATOR_TOKEN_FILE`, or from `POLIS_OPERATOR_TOKEN` for local
-development. Every command emits JSON. Agent configuration is intentionally
-absent: `kubectl` and the `Agent` CR are its single declarative path.
+development. The `history` command instead uses the current kubeconfig through
+the official Kubernetes Go client. Every command emits JSON. Agent
+configuration is intentionally absent: Kubernetes and the `Agent` CR are its
+single declarative path.
+
+Setting `POLIS_VIA_KUBERNETES=true` makes ordinary mailbox commands use the
+same Go client to execute the command in the ready mailbox pod, where the
+operator credential is mounted. This keeps the credential off the operator's
+machine without invoking `kubectl`. The local deployment's Nix wrapper enables
+this mode automatically.
 
 Send the first trigger and inspect progress:
 
@@ -227,6 +235,22 @@ The full operator surface is:
 | `polisctl agent state ID active\|paused\|terminated` | Change desired state. Termination is irreversible. |
 | `polisctl message [--sender LABEL] ID JSON` | Append a durable message. The default sender is `operator`. |
 | `polisctl events [ID]` | Return fleet-wide events or only one agent's lifecycle and journal events. |
+| `polisctl history [--namespace NAMESPACE] [--context CONTEXT] [--tail N] ID` | Read the newest persisted Pi session from a running agent's workspace. |
+
+Session history remains on the workspace PVC and is not copied into the
+mailbox. `polisctl history` discovers the agent pod by label and uses the
+Kubernetes pod-exec API through `client-go` to read the newest JSONL session as
+one structured JSON document:
+
+```console
+polisctl history researcher
+polisctl history --tail 20 researcher
+```
+
+The command requires Kubernetes permission to list pods and exec into the
+agent container. It works while the agent pod is running. Session entries can
+contain prompts, model output, tool calls, tool results, and other sensitive
+workspace-derived content.
 
 Flags such as `--sender` and `--url` must precede positional arguments.
 

@@ -21,7 +21,7 @@
           pname = "polis-programs";
           version = "0.1.0";
           src = self;
-          vendorHash = "sha256-o2tc3rupI/TKIYBh0+PTsBoYCAgtbpYf8soZuOr4d/Y=";
+          vendorHash = "sha256-rirtY4Xkg+z3Xu/5dI5IUlSQ4VocuMMSIU5VdKTrKRc=";
           subPackages = [
             "./cmd/polis"
             "./cmd/polisctl"
@@ -294,10 +294,12 @@
         system:
         let
           pkgs = pkgsFor system;
+          polisctl = programFor system "polisctl" "Operator control CLI for Polis";
         in
         {
           default = pkgs.mkShell {
             packages = [
+              polisctl
               pkgs.curl
               pkgs.go
               pkgs.gopls
