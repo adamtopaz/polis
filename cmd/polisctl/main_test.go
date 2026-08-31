@@ -26,7 +26,7 @@ func TestOperatorCommands(t *testing.T) {
 	t.Setenv("POLIS_URL", server.URL)
 	t.Setenv("POLIS_OPERATOR_TOKEN", "operator-secret")
 	t.Setenv("POLIS_OPERATOR_TOKEN_FILE", "")
-	lease, err := database.Acquire("declared", "worker", 30*time.Second)
+	lease, err := database.Acquire("declared", "worker", 30*time.Second, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

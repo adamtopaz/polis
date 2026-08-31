@@ -16,6 +16,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -54,7 +55,7 @@ var (
 	reservedVolumes = []string{"workspace", "tmp", "worker-auth-source", "worker-auth"}
 	reservedEnv     = []string{
 		"POLIS_URL", "POLIS_AGENT_ID", "POLIS_CHARTER", "POLIS_WORKSPACE", "POLIS_LEASE_DURATION",
-		"POLIS_SHUTDOWN_GRACE", "POLIS_WORKER_TOKEN", "POLIS_WORKER_TOKEN_FILE",
+		"POLIS_SHUTDOWN_GRACE", "POLIS_WORKER_TOKEN", "POLIS_WORKER_TOKEN_FILE", "POLIS_ALLOWED_RECIPIENTS",
 	}
 )
 
@@ -198,7 +199,7 @@ func (r *AgentReconciler) podTemplate(agent *polisv1alpha1.Agent, templateNames,
 	if container.SecurityContext == nil {
 		container.SecurityContext = restrictedSecurityContext()
 	}
-	container.Env = appendWithoutNamed(container.Env, reservedEnv,
+	workerEnvironment := []corev1.EnvVar{
 		corev1.EnvVar{Name: "POLIS_URL", Value: r.mailboxURL()},
 		corev1.EnvVar{Name: "POLIS_AGENT_ID", Value: agent.Name},
 		corev1.EnvVar{Name: "POLIS_CHARTER", Value: agent.Spec.Charter},
@@ -206,7 +207,19 @@ func (r *AgentReconciler) podTemplate(agent *polisv1alpha1.Agent, templateNames,
 		corev1.EnvVar{Name: "POLIS_LEASE_DURATION", Value: "30s"},
 		corev1.EnvVar{Name: "POLIS_SHUTDOWN_GRACE", Value: "10s"},
 		corev1.EnvVar{Name: "POLIS_WORKER_TOKEN_FILE", Value: workerAuthPath + "/token"},
-	)
+	}
+	if agent.Spec.Messaging != nil {
+		recipients := agent.Spec.Messaging.AllowedRecipients
+		if recipients == nil {
+			recipients = []string{}
+		}
+		encoded, err := json.Marshal(recipients)
+		if err != nil {
+			return corev1.PodTemplateSpec{}, fmt.Errorf("encode messaging policy: %w", err)
+		}
+		workerEnvironment = append(workerEnvironment, corev1.EnvVar{Name: "POLIS_ALLOWED_RECIPIENTS", Value: string(encoded)})
+	}
+	container.Env = appendWithoutNamed(container.Env, reservedEnv, workerEnvironment...)
 	container.VolumeMounts = appendWithoutNamed(container.VolumeMounts, reservedVolumes,
 		corev1.VolumeMount{Name: "workspace", MountPath: workspacePath},
 		corev1.VolumeMount{Name: "tmp", MountPath: "/tmp"},
@@ -263,6 +276,18 @@ func validateAgent(agent *polisv1alpha1.Agent) ([]string, []string, error) {
 	}
 	if len(agent.Spec.Runtime.Command) == 0 || agent.Spec.Runtime.Command[0] == "" {
 		return nil, nil, errors.New("spec.runtime.command is required")
+	}
+	if agent.Spec.Messaging != nil {
+		seenRecipients := make(map[string]bool, len(agent.Spec.Messaging.AllowedRecipients))
+		for _, recipient := range agent.Spec.Messaging.AllowedRecipients {
+			if len(recipient) > 50 || !dnsLabel.MatchString(recipient) {
+				return nil, nil, fmt.Errorf("messaging recipient %q must be a DNS label of at most 50 characters", recipient)
+			}
+			if seenRecipients[recipient] {
+				return nil, nil, fmt.Errorf("duplicate messaging recipient %q", recipient)
+			}
+			seenRecipients[recipient] = true
+		}
 	}
 	if len(agent.Spec.VolumeClaimTemplates) == 0 {
 		return nil, nil, errors.New("spec.volumeClaimTemplates must contain a workspace template")

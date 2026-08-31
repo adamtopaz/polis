@@ -116,6 +116,9 @@ spec:
       - "32768"
       - --compaction-keep-recent-tokens
       - "24000"
+  messaging:
+    allowedRecipients:
+      - researcher
   volumeClaimTemplates:
     - metadata:
         name: workspace
@@ -140,6 +143,16 @@ worker command, charter, runtime command, mailbox connection, private workspace
 mount, and credential boundary. `podTemplate` preserves native pod settings
 such as resources, affinity, tolerations, init containers, shared PVC volumes,
 and volume mounts.
+
+`spec.messaging.allowedRecipients` is a directional, exact-ID allow-list for
+messages authored by this agent. The example permits `researcher` to message
+itself. Omitting `messaging` preserves unrestricted outbound messaging; setting
+`messaging: {}` or an empty `allowedRecipients` list denies every
+agent-authored message. Self-messaging requires the agent's own ID. Operator
+messages to the agent and messages it receives are unaffected. Updating the
+policy changes the `Agent` generation, replaces its pod, and binds the new
+policy to the replacement incarnation's lease. Messages already queued for
+delivery are not removed by a policy change.
 
 By default, the generated agent and credential-init containers run as numeric
 UID:GID `10001:10001`, with supplemental filesystem group `10001`. They cannot
@@ -212,7 +225,7 @@ automatically and emits JSON.
 | `polis inspect` | Return the current agent's identity, state, phase, and lease information. |
 | `polis messages` | Return mailbox messages after the acknowledgement cursor. |
 | `polis ack MESSAGE_ID` | Acknowledge that message and every earlier message. The cursor cannot move backward. |
-| `polis send AGENT_ID JSON` | Send a durable message to any non-terminated agent, including yourself. |
+| `polis send AGENT_ID JSON` | Send a durable message to a permitted, non-terminated agent. |
 | `polis journal KIND JSON` | Append a durable, agent-authored event. |
 
 Examples:
@@ -229,7 +242,8 @@ polis journal decision.made '{"decision":"Continue the experiment."}'
 Agents cannot pause, resume, or terminate themselves. Those are operator
 decisions. A message sent while the recipient is busy remains queued for its
 next turn. Self-messages and messages to other agents are the same kind of
-durable mailbox message.
+durable mailbox message and pass through the same outbound policy check. A
+denied send returns an authorization error and queues nothing.
 
 ## Pi SDK runtime
 
@@ -320,7 +334,7 @@ Polis currently uses three deliberately small bearer-token boundaries:
 | --- | --- | --- |
 | Operator token | `polisctl` and mailbox | Fleet administration and event inspection. |
 | Worker token | Mailbox and dedicated workers | Acquire the worker's declared agent lease. |
-| Incarnation token | One worker and its runtime | Act only as the leased agent while that lease is valid. |
+| Incarnation token | One worker and its runtime | Act only as the leased agent while that lease is valid, including its outbound message allow-list. |
 
 The worker can consume its credential from a temporary file before starting
 its agent runtime. Operator, worker, and supervisor identity variables are
@@ -331,7 +345,8 @@ the agent-facing `polis` but deliberately omits `polisctl`.
 `/v1/agents` and `/v1/events` require the operator token.
 `/v1/worker/acquire` requires the worker token. Heartbeats, exits, and
 `/v1/self` requests require a valid incarnation token. `/healthz` is
-unauthenticated.
+unauthenticated. Outbound messaging is enforced by the mailbox rather than the
+`polis` CLI or system prompt, so direct HTTP requests cannot bypass it.
 
 ## Build and development
 
@@ -381,6 +396,8 @@ its one agent. The local k3s deployment uses the production Pi image.
   sharing therefore depends on the cluster's storage semantics.
 - There is no Polis scheduler. Agents can use Bash to arrange future invocations
   of `polis send` when they need them.
+- Messaging policy is only an exact outbound agent-ID allow-list. It has no
+  groups, label selectors, wildcards, deny rules, or hierarchy.
 
 These constraints keep the lifecycle and failure model obvious while real
 usage establishes what needs to scale next.

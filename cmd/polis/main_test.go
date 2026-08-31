@@ -26,11 +26,11 @@ func TestAgentCommands(t *testing.T) {
 	server := httptest.NewServer(api.New(database, slog.New(slog.NewTextHandler(io.Discard, nil)), "operator-secret", "worker-secret").Handler())
 	defer server.Close()
 
-	lease, err := database.Acquire("parent", "worker", 30*time.Second)
+	lease, err := database.Acquire("parent", "worker", 30*time.Second, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	targetRegistration, err := database.Acquire("y-target", "target-worker", 30*time.Second)
+	targetRegistration, err := database.Acquire("y-target", "target-worker", 30*time.Second, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestAgentCommands(t *testing.T) {
 		}
 	}
 
-	targetLease, err := database.Acquire("y-target", "target-worker", 30*time.Second)
+	targetLease, err := database.Acquire("y-target", "target-worker", 30*time.Second, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

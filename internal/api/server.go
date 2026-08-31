@@ -116,10 +116,11 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) acquire(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		AgentID     string `json:"agent_id"`
-		WorkerID    string `json:"worker_id"`
-		TTLSeconds  int64  `json:"ttl_seconds"`
-		WaitSeconds int64  `json:"wait_seconds"`
+		AgentID           string    `json:"agent_id"`
+		WorkerID          string    `json:"worker_id"`
+		TTLSeconds        int64     `json:"ttl_seconds"`
+		WaitSeconds       int64     `json:"wait_seconds"`
+		AllowedRecipients *[]string `json:"allowed_recipients,omitempty"`
 	}
 	if !decode(w, r, &request) {
 		return
@@ -132,7 +133,7 @@ func (s *Server) acquire(w http.ResponseWriter, r *http.Request) {
 	}
 	deadline := time.Now().Add(wait)
 	for {
-		lease, err := s.store.Acquire(request.AgentID, request.WorkerID, ttl)
+		lease, err := s.store.Acquire(request.AgentID, request.WorkerID, ttl, request.AllowedRecipients)
 		if err == nil {
 			respond(w, http.StatusOK, lease, nil)
 			return
@@ -302,6 +303,8 @@ func writeError(w http.ResponseWriter, err error) {
 		status = http.StatusNotFound
 	case errors.Is(err, store.ErrInvalidLease):
 		status = http.StatusUnauthorized
+	case errors.Is(err, store.ErrForbidden):
+		status = http.StatusForbidden
 	case strings.Contains(err.Error(), "already exists"):
 		status = http.StatusConflict
 	case err.Error() == "internal server error":

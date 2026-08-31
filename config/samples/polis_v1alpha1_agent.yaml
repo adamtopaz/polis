@@ -8,6 +8,9 @@ spec:
     image: ghcr.io/adamtopaz/polis-pi:main
     command:
       - /bin/polis-pi-agent
+  messaging:
+    allowedRecipients:
+      - sample
   volumeClaimTemplates:
     - metadata:
         name: workspace

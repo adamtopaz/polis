@@ -86,7 +86,7 @@ func TestHTTPAgentLifecycle(t *testing.T) {
 	if removedApplyResponse.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("removed apply route returned %d", removedApplyResponse.StatusCode)
 	}
-	if _, _, err := client.New(server.URL).Acquire(ctx, "http-agent", "test-worker", 30*time.Second, 0); err == nil {
+	if _, _, err := client.New(server.URL).Acquire(ctx, "http-agent", "test-worker", 30*time.Second, 0, nil); err == nil {
 		t.Fatal("worker acquire accepted no token")
 	} else {
 		var apiError *client.Error
@@ -94,11 +94,11 @@ func TestHTTPAgentLifecycle(t *testing.T) {
 			t.Fatalf("unauthorized worker acquire returned %T %v", err, err)
 		}
 	}
-	if _, _, err := client.NewWorker(server.URL, "wrong-secret").Acquire(ctx, "http-agent", "test-worker", 30*time.Second, 0); err == nil {
+	if _, _, err := client.NewWorker(server.URL, "wrong-secret").Acquire(ctx, "http-agent", "test-worker", 30*time.Second, 0, nil); err == nil {
 		t.Fatal("worker acquire accepted the wrong token")
 	}
 	workerAPI := client.NewWorker(server.URL, "worker-secret")
-	lease, ok, err := workerAPI.Acquire(ctx, "http-agent", "test-worker", 30*time.Second, 0)
+	lease, ok, err := workerAPI.Acquire(ctx, "http-agent", "test-worker", 30*time.Second, 0, nil)
 	if err != nil || !ok {
 		t.Fatalf("acquire = %#v, %v, %v", lease, ok, err)
 	}
@@ -135,5 +135,45 @@ func TestHTTPAgentLifecycle(t *testing.T) {
 	agent, err := api.SetState(ctx, "http-agent", model.StateTerminated)
 	if err != nil || agent.State != model.StateTerminated {
 		t.Fatalf("terminated agent = %#v, %v", agent, err)
+	}
+}
+
+func TestHTTPMessagingPolicy(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "polis.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	server := httptest.NewServer(New(database, slog.New(slog.NewTextHandler(io.Discard, nil)), "operator-secret", "worker-secret").Handler())
+	defer server.Close()
+
+	ctx := context.Background()
+	workerAPI := client.NewWorker(server.URL, "worker-secret")
+	for _, id := range []string{"allowed", "blocked"} {
+		lease, ok, err := workerAPI.Acquire(ctx, id, id+"-worker", 30*time.Second, 0, nil)
+		if err != nil || !ok {
+			t.Fatalf("register %s = %#v, %v, %v", id, lease, ok, err)
+		}
+		if err := workerAPI.Exited(ctx, lease.Token, "registered"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	allowedRecipients := []string{"allowed"}
+	sender, ok, err := workerAPI.Acquire(ctx, "sender", "sender-worker", 30*time.Second, 0, &allowedRecipients)
+	if err != nil || !ok {
+		t.Fatalf("acquire sender = %#v, %v, %v", sender, ok, err)
+	}
+	agentAPI := client.New(server.URL)
+	if _, err := agentAPI.SendMessage(ctx, sender.Token, "allowed", json.RawMessage(`{"ok":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agentAPI.SendMessage(ctx, sender.Token, "blocked", json.RawMessage(`{"ok":false}`)); err == nil {
+		t.Fatal("restricted HTTP send succeeded")
+	} else {
+		var apiError *client.Error
+		if !errors.As(err, &apiError) || apiError.Status != http.StatusForbidden {
+			t.Fatalf("restricted HTTP send returned %T %v", err, err)
+		}
 	}
 }

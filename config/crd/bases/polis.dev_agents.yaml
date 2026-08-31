@@ -50,6 +50,22 @@ spec:
                 description: Charter is appended to the runtime's system prompt.
                 minLength: 1
                 type: string
+              messaging:
+                description: |-
+                  Messaging restricts agent-authored messages. When omitted, outbound
+                  messaging is unrestricted for backward compatibility. Operator messages
+                  and messages received by this agent are unaffected.
+                properties:
+                  allowedRecipients:
+                    description: |-
+                      AllowedRecipients is the exact set of agent IDs this agent may message.
+                      Self-messaging requires the agent's own ID. An empty set denies all
+                      agent-authored messages.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: set
+                type: object
               podTemplate:
                 description: |-
                   PodTemplate carries ordinary Kubernetes pod settings. When supplied, its

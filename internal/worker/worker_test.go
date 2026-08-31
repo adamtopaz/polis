@@ -13,6 +13,7 @@ func TestControlPlaneCredentialsAreNotPassedToAgentRuntime(t *testing.T) {
 		"POLIS_WORKER_TOKEN=worker-secret",
 		"POLIS_WORKER_TOKEN_FILE=/run/secrets/worker-token",
 		"POLIS_AGENT_ID=alpha",
+		`POLIS_ALLOWED_RECIPIENTS=["beta"]`,
 	}
 	filtered := withoutControlPlaneCredentials(environment)
 	for _, credential := range environment[1:5] {
@@ -25,5 +26,8 @@ func TestControlPlaneCredentialsAreNotPassedToAgentRuntime(t *testing.T) {
 	}
 	if slices.Contains(filtered, "POLIS_AGENT_ID=alpha") {
 		t.Fatalf("supervisor identity reached runtime unchanged: %#v", filtered)
+	}
+	if slices.Contains(filtered, `POLIS_ALLOWED_RECIPIENTS=["beta"]`) {
+		t.Fatalf("supervisor messaging policy reached runtime unchanged: %#v", filtered)
 	}
 }

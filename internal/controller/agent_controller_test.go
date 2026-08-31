@@ -124,6 +124,42 @@ func TestAgentReconcilerRejectsMultiplePersistentContainers(t *testing.T) {
 	}
 }
 
+func TestAgentReconcilerProjectsMessagingPolicy(t *testing.T) {
+	agent := testAgent()
+	agent.Spec.PodTemplate.Spec.Containers[0].Env = append(agent.Spec.PodTemplate.Spec.Containers[0].Env,
+		corev1.EnvVar{Name: "POLIS_ALLOWED_RECIPIENTS", Value: `["forged"]`})
+	agent.Spec.Messaging = &polisv1alpha1.AgentMessaging{AllowedRecipients: []string{"reviewer", "researcher"}}
+	templateNames, claimNames, err := validateAgent(agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template, err := (&AgentReconciler{}).podTemplate(agent, templateNames, claimNames)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := envValue(template.Spec.Containers[0].Env, "POLIS_ALLOWED_RECIPIENTS"); got != `["reviewer","researcher"]` {
+		t.Fatalf("projected messaging policy = %q", got)
+	}
+
+	agent.Spec.Messaging = &polisv1alpha1.AgentMessaging{}
+	template, err = (&AgentReconciler{}).podTemplate(agent, templateNames, claimNames)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := envValue(template.Spec.Containers[0].Env, "POLIS_ALLOWED_RECIPIENTS"); got != `[]` {
+		t.Fatalf("empty messaging policy = %q", got)
+	}
+
+	agent.Spec.Messaging = nil
+	template, err = (&AgentReconciler{}).podTemplate(agent, templateNames, claimNames)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := envValue(template.Spec.Containers[0].Env, "POLIS_ALLOWED_RECIPIENTS"); got != "" {
+		t.Fatalf("omitted messaging policy was not unrestricted: %q", got)
+	}
+}
+
 func TestAgentReconcilerRetriesDeploymentConflicts(t *testing.T) {
 	scheme := testScheme(t)
 	agent := testAgent()

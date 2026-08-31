@@ -15,7 +15,7 @@ func TestAgentLifecycle(t *testing.T) {
 	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 	st.now = func() time.Time { return now }
 
-	lease, err := st.Acquire("alpha", "worker-1", 30*time.Second)
+	lease, err := st.Acquire("alpha", "worker-1", 30*time.Second, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestAgentLifecycle(t *testing.T) {
 
 func TestAcquireRegistersAndIsPinnedToAgent(t *testing.T) {
 	st := openTestStore(t)
-	alphaLease, err := st.Acquire("alpha", "alpha-pod", 30*time.Second)
+	alphaLease, err := st.Acquire("alpha", "alpha-pod", 30*time.Second, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestAcquireRegistersAndIsPinnedToAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	lease, err := st.Acquire("beta", "beta-pod", 30*time.Second)
+	lease, err := st.Acquire("beta", "beta-pod", 30*time.Second, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestExpiredLeaseIsFencedAndReacquired(t *testing.T) {
 	st := openTestStore(t)
 	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 	st.now = func() time.Time { return now }
-	first, err := st.Acquire("alpha", "worker-1", 5*time.Second)
+	first, err := st.Acquire("alpha", "worker-1", 5*time.Second, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestExpiredLeaseIsFencedAndReacquired(t *testing.T) {
 		t.Fatalf("first delivery = %#v, %v", firstDelivery, err)
 	}
 	now = now.Add(6 * time.Second)
-	second, err := st.Acquire("alpha", "worker-2", 5*time.Second)
+	second, err := st.Acquire("alpha", "worker-2", 5*time.Second, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestReportedExitPreservesUnreadMessages(t *testing.T) {
 	st := openTestStore(t)
 	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 	st.now = func() time.Time { return now }
-	first, err := st.Acquire("alpha", "worker-1", 30*time.Second)
+	first, err := st.Acquire("alpha", "worker-1", 30*time.Second, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestReportedExitPreservesUnreadMessages(t *testing.T) {
 	}
 	assertPhase(t, agent, "ready")
 
-	second, err := st.Acquire("alpha", "worker-2", 30*time.Second)
+	second, err := st.Acquire("alpha", "worker-2", 30*time.Second, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestReopenPreservesLeaseMailboxAndJournal(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.now = func() time.Time { return now }
-	lease, err := st.Acquire("alpha", "worker-1", 30*time.Second)
+	lease, err := st.Acquire("alpha", "worker-1", 30*time.Second, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,11 +240,11 @@ func TestReopenPreservesLeaseMailboxAndJournal(t *testing.T) {
 
 func TestAgentCanJournalAndMessage(t *testing.T) {
 	st := openTestStore(t)
-	lease, err := st.Acquire("sender", "worker", 30*time.Second)
+	lease, err := st.Acquire("sender", "worker", 30*time.Second, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, err := st.Acquire("target", "target-worker", 30*time.Second)
+	target, err := st.Acquire("target", "target-worker", 30*time.Second, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,6 +267,85 @@ func TestAgentCanJournalAndMessage(t *testing.T) {
 	}
 	if len(events) < 2 {
 		t.Fatalf("sender events = %#v", events)
+	}
+}
+
+func TestAgentMessagingPolicy(t *testing.T) {
+	st := openTestStore(t)
+	for _, id := range []string{"allowed", "blocked"} {
+		lease, err := st.Acquire(id, id+"-worker", 30*time.Second, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.Exit(lease.Token, "registered"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	allowedRecipients := []string{"allowed"}
+	sender, err := st.Acquire("sender", "sender-worker", 30*time.Second, &allowedRecipients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SendMessageAs(sender.Token, "allowed", json.RawMessage(`{"allowed":true}`)); err != nil {
+		t.Fatalf("allowed send failed: %v", err)
+	}
+	for _, denied := range []string{"blocked", "sender"} {
+		if _, err := st.SendMessageAs(sender.Token, denied, json.RawMessage(`{"allowed":false}`)); !errors.Is(err, ErrForbidden) {
+			t.Fatalf("send to %q returned %v, want forbidden", denied, err)
+		}
+	}
+	if _, err := st.SendMessage("blocked", "operator", json.RawMessage(`{"operator":true}`)); err != nil {
+		t.Fatalf("operator message was restricted: %v", err)
+	}
+
+	allowedLease, err := st.Acquire("allowed", "allowed-worker", 30*time.Second, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowedMessages, err := st.Messages(allowedLease.Token, 100)
+	if err != nil || len(allowedMessages) != 1 || allowedMessages[0].Sender != "agent:sender" {
+		t.Fatalf("allowed messages = %#v, %v", allowedMessages, err)
+	}
+	blockedLease, err := st.Acquire("blocked", "blocked-worker", 30*time.Second, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockedMessages, err := st.Messages(blockedLease.Token, 100)
+	if err != nil || len(blockedMessages) != 1 || blockedMessages[0].Sender != "operator" {
+		t.Fatalf("blocked messages = %#v, %v", blockedMessages, err)
+	}
+}
+
+func TestReplacementLeaseReplacesMessagingPolicy(t *testing.T) {
+	st := openTestStore(t)
+	target, err := st.Acquire("target", "target-worker", 30*time.Second, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Exit(target.Token, "registered"); err != nil {
+		t.Fatal(err)
+	}
+
+	allowedRecipients := []string{"target"}
+	first, err := st.Acquire("sender", "first-worker", 30*time.Second, &allowedRecipients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SendMessageAs(first.Token, "target", json.RawMessage(`{"generation":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Exit(first.Token, "replaced"); err != nil {
+		t.Fatal(err)
+	}
+
+	denyAll := []string{}
+	second, err := st.Acquire("sender", "second-worker", 30*time.Second, &denyAll)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SendMessageAs(second.Token, "target", json.RawMessage(`{"generation":2}`)); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("replacement policy returned %v, want forbidden", err)
 	}
 }
 

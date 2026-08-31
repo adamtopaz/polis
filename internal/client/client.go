@@ -84,11 +84,22 @@ func (c *Client) Events(ctx context.Context, id string) ([]model.Event, error) {
 	return response.Items, err
 }
 
-func (c *Client) Acquire(ctx context.Context, agentID, workerID string, ttl, wait time.Duration) (model.Lease, bool, error) {
+func (c *Client) Acquire(ctx context.Context, agentID, workerID string, ttl, wait time.Duration, allowedRecipients *[]string) (model.Lease, bool, error) {
 	var lease model.Lease
-	status, err := c.doStatus(ctx, http.MethodPost, "/v1/worker/acquire", c.workerToken, map[string]any{
-		"agent_id": agentID, "worker_id": workerID, "ttl_seconds": int64(ttl.Seconds()), "wait_seconds": int64(wait.Seconds()),
-	}, &lease)
+	request := struct {
+		AgentID           string    `json:"agent_id"`
+		WorkerID          string    `json:"worker_id"`
+		TTLSeconds        int64     `json:"ttl_seconds"`
+		WaitSeconds       int64     `json:"wait_seconds"`
+		AllowedRecipients *[]string `json:"allowed_recipients,omitempty"`
+	}{
+		AgentID:           agentID,
+		WorkerID:          workerID,
+		TTLSeconds:        int64(ttl.Seconds()),
+		WaitSeconds:       int64(wait.Seconds()),
+		AllowedRecipients: allowedRecipients,
+	}
+	status, err := c.doStatus(ctx, http.MethodPost, "/v1/worker/acquire", c.workerToken, request, &lease)
 	if status == http.StatusNoContent && err == nil {
 		return model.Lease{}, false, nil
 	}

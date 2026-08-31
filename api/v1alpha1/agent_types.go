@@ -29,12 +29,27 @@ type AgentRuntime struct {
 	Command []string `json:"command"`
 }
 
+type AgentMessaging struct {
+	// AllowedRecipients is the exact set of agent IDs this agent may message.
+	// Self-messaging requires the agent's own ID. An empty set denies all
+	// agent-authored messages.
+	// +listType=set
+	// +optional
+	AllowedRecipients []string `json:"allowedRecipients,omitempty"`
+}
+
 type AgentSpec struct {
 	// Charter is appended to the runtime's system prompt.
 	// +kubebuilder:validation:MinLength=1
 	Charter string `json:"charter"`
 
 	Runtime AgentRuntime `json:"runtime"`
+
+	// Messaging restricts agent-authored messages. When omitted, outbound
+	// messaging is unrestricted for backward compatibility. Operator messages
+	// and messages received by this agent are unaffected.
+	// +optional
+	Messaging *AgentMessaging `json:"messaging,omitempty"`
 
 	// VolumeClaimTemplates creates retained, agent-private claims named
 	// <agent>-<template>. A template named workspace is required and is mounted

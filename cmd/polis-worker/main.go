@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -40,6 +41,10 @@ func run(ctx context.Context, args []string) error {
 	if flags.NArg() == 0 {
 		return errors.New("polis-worker requires a runtime command after --")
 	}
+	allowedRecipients, err := allowedRecipientsFromEnvironment()
+	if err != nil {
+		return err
+	}
 	workerToken, err := token.Load("POLIS_WORKER_TOKEN", *workerTokenFile, "worker")
 	if err != nil {
 		return err
@@ -51,17 +56,33 @@ func run(ctx context.Context, args []string) error {
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	return worker.Run(ctx, worker.Config{
-		MailboxURL:    *mailboxURL,
-		WorkerToken:   workerToken,
-		AgentID:       *agentID,
-		ID:            *id,
-		Charter:       *charter,
-		Runtime:       flags.Args(),
-		Workspace:     *workspace,
-		LeaseDuration: *lease,
-		ShutdownGrace: *grace,
-		Logger:        logger,
+		MailboxURL:        *mailboxURL,
+		WorkerToken:       workerToken,
+		AgentID:           *agentID,
+		ID:                *id,
+		Charter:           *charter,
+		Runtime:           flags.Args(),
+		Workspace:         *workspace,
+		LeaseDuration:     *lease,
+		ShutdownGrace:     *grace,
+		AllowedRecipients: allowedRecipients,
+		Logger:            logger,
 	})
+}
+
+func allowedRecipientsFromEnvironment() (*[]string, error) {
+	value, restricted := os.LookupEnv("POLIS_ALLOWED_RECIPIENTS")
+	if !restricted {
+		return nil, nil
+	}
+	var recipients []string
+	if err := json.Unmarshal([]byte(value), &recipients); err != nil {
+		return nil, fmt.Errorf("parse POLIS_ALLOWED_RECIPIENTS: %w", err)
+	}
+	if recipients == nil {
+		recipients = []string{}
+	}
+	return &recipients, nil
 }
 
 func env(name, fallback string) string {

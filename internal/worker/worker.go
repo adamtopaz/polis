@@ -19,16 +19,17 @@ import (
 const incarnationRetryDelay = 2 * time.Second
 
 type Config struct {
-	MailboxURL    string
-	WorkerToken   string
-	AgentID       string
-	ID            string
-	Charter       string
-	Runtime       []string
-	Workspace     string
-	LeaseDuration time.Duration
-	ShutdownGrace time.Duration
-	Logger        *slog.Logger
+	MailboxURL        string
+	WorkerToken       string
+	AgentID           string
+	ID                string
+	Charter           string
+	Runtime           []string
+	Workspace         string
+	LeaseDuration     time.Duration
+	ShutdownGrace     time.Duration
+	AllowedRecipients *[]string
+	Logger            *slog.Logger
 }
 
 func Run(ctx context.Context, config Config) error {
@@ -66,7 +67,7 @@ func runAgent(ctx context.Context, config Config) error {
 	api := client.NewWorker(config.MailboxURL, config.WorkerToken)
 	log := config.Logger.With("worker", config.ID, "agent", config.AgentID)
 	for ctx.Err() == nil {
-		lease, ok, err := api.Acquire(ctx, config.AgentID, config.ID, config.LeaseDuration, 20*time.Second)
+		lease, ok, err := api.Acquire(ctx, config.AgentID, config.ID, config.LeaseDuration, 20*time.Second, config.AllowedRecipients)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -178,6 +179,7 @@ func withoutControlPlaneCredentials(environment []string) []string {
 			strings.HasPrefix(variable, "POLIS_AGENT_TOKEN=") ||
 			strings.HasPrefix(variable, "POLIS_CHARTER=") ||
 			strings.HasPrefix(variable, "POLIS_WORKSPACE=") ||
+			strings.HasPrefix(variable, "POLIS_ALLOWED_RECIPIENTS=") ||
 			strings.HasPrefix(variable, "POLIS_CHARTER_PATH=") {
 			continue
 		}

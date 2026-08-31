@@ -51,6 +51,12 @@ func TestAgentCRDPreservesEmbeddedTemplateMetadata(t *testing.T) {
 	for _, field := range []string{"labels", "annotations"} {
 		requiredProperty(t, podMetadata, field)
 	}
+
+	messaging := requiredProperty(t, spec, "messaging")
+	allowedRecipients := requiredProperty(t, messaging, "allowedRecipients")
+	if allowedRecipients.XListType == nil || *allowedRecipients.XListType != "set" {
+		t.Fatalf("allowedRecipients is not a Kubernetes set: %#v", allowedRecipients.XListType)
+	}
 }
 
 func requiredProperty(t *testing.T, schema extensionsv1.JSONSchemaProps, name string) extensionsv1.JSONSchemaProps {

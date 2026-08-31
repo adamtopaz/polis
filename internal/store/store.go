@@ -19,6 +19,7 @@ var (
 	ErrNotFound     = errors.New("not found")
 	ErrNoAgent      = errors.New("no agent ready")
 	ErrInvalidLease = errors.New("invalid or expired lease")
+	ErrForbidden    = errors.New("forbidden")
 	idPattern       = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 )
 
@@ -33,14 +34,15 @@ var (
 )
 
 type agentRecord struct {
-	ID             string      `json:"id"`
-	State          model.State `json:"state"`
-	LeaseOwner     string      `json:"lease_owner,omitempty"`
-	LeaseToken     string      `json:"lease_token,omitempty"`
-	LeaseExpiresAt *time.Time  `json:"lease_expires_at,omitempty"`
-	MailboxCursor  uint64      `json:"mailbox_cursor,omitempty"`
-	CreatedAt      time.Time   `json:"created_at"`
-	UpdatedAt      time.Time   `json:"updated_at"`
+	ID                string      `json:"id"`
+	State             model.State `json:"state"`
+	LeaseOwner        string      `json:"lease_owner,omitempty"`
+	LeaseToken        string      `json:"lease_token,omitempty"`
+	LeaseExpiresAt    *time.Time  `json:"lease_expires_at,omitempty"`
+	AllowedRecipients *[]string   `json:"allowed_recipients,omitempty"`
+	MailboxCursor     uint64      `json:"mailbox_cursor,omitempty"`
+	CreatedAt         time.Time   `json:"created_at"`
+	UpdatedAt         time.Time   `json:"updated_at"`
 }
 
 type Store struct {
@@ -120,7 +122,7 @@ func (s *Store) SetState(id string, state model.State, actor string) (model.Agen
 	return publicAgent(record, now), err
 }
 
-func (s *Store) Acquire(agentID, worker string, ttl time.Duration) (model.Lease, error) {
+func (s *Store) Acquire(agentID, worker string, ttl time.Duration, allowedRecipients *[]string) (model.Lease, error) {
 	if !idPattern.MatchString(agentID) {
 		return model.Lease{}, fmt.Errorf("agent id must match %s", idPattern)
 	}
@@ -129,6 +131,9 @@ func (s *Store) Acquire(agentID, worker string, ttl time.Duration) (model.Lease,
 	}
 	if ttl < 5*time.Second || ttl > 10*time.Minute {
 		return model.Lease{}, errors.New("lease duration must be between 5s and 10m")
+	}
+	if err := validateAllowedRecipients(allowedRecipients); err != nil {
+		return model.Lease{}, err
 	}
 	now := s.now()
 	var lease model.Lease
@@ -157,6 +162,7 @@ func (s *Store) Acquire(agentID, worker string, ttl time.Duration) (model.Lease,
 		record.LeaseOwner = worker
 		record.LeaseToken = token
 		record.LeaseExpiresAt = &expires
+		record.AllowedRecipients = cloneStrings(allowedRecipients)
 		record.UpdatedAt = now
 		if err := putRecord(agents, record.ID, record); err != nil {
 			return err
@@ -239,29 +245,31 @@ func (s *Store) SendMessage(agentID, sender string, body json.RawMessage) (model
 	now := s.now()
 	var message model.Message
 	err := s.db.Update(func(tx *bolt.Tx) error {
-		var record agentRecord
-		if err := getRecord(tx.Bucket(bucketAgents), agentID, &record); err != nil {
-			return err
-		}
-		if record.State == model.StateTerminated {
-			return errors.New("cannot message a terminated agent")
-		}
 		var err error
-		message, err = appendMessage(tx, agentID, sender, body, now)
-		if err != nil {
-			return err
-		}
-		return appendEvent(tx, model.Event{AgentID: agentID, Actor: sender, Kind: "message.sent", Data: mustJSON(map[string]any{"message_id": message.ID}), CreatedAt: now})
+		message, err = sendMessage(tx, agentID, sender, body, now)
+		return err
 	})
 	return message, err
 }
 
 func (s *Store) SendMessageAs(token, agentID string, body json.RawMessage) (model.Message, error) {
-	agent, err := s.Self(token)
-	if err != nil {
-		return model.Message{}, err
+	if !json.Valid(body) {
+		return model.Message{}, errors.New("message body must be valid JSON")
 	}
-	return s.SendMessage(agentID, "agent:"+agent.ID, body)
+	now := s.now()
+	var message model.Message
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		record, err := recordForToken(tx, token, now)
+		if err != nil {
+			return err
+		}
+		if !recipientAllowed(record.AllowedRecipients, agentID) {
+			return fmt.Errorf("%w: agent %q may not message agent %q", ErrForbidden, record.ID, agentID)
+		}
+		message, err = sendMessage(tx, agentID, "agent:"+record.ID, body, now)
+		return err
+	})
+	return message, err
 }
 
 func (s *Store) Messages(token string, limit int) ([]model.Message, error) {
@@ -423,6 +431,62 @@ func clearLease(tx *bolt.Tx, record *agentRecord) {
 	record.LeaseOwner = ""
 	record.LeaseToken = ""
 	record.LeaseExpiresAt = nil
+	record.AllowedRecipients = nil
+}
+
+func validateAllowedRecipients(recipients *[]string) error {
+	if recipients == nil {
+		return nil
+	}
+	seen := make(map[string]bool, len(*recipients))
+	for _, recipient := range *recipients {
+		if !idPattern.MatchString(recipient) {
+			return fmt.Errorf("allowed recipient must match %s", idPattern)
+		}
+		if seen[recipient] {
+			return fmt.Errorf("duplicate allowed recipient %q", recipient)
+		}
+		seen[recipient] = true
+	}
+	return nil
+}
+
+func cloneStrings(values *[]string) *[]string {
+	if values == nil {
+		return nil
+	}
+	cloned := append([]string{}, (*values)...)
+	return &cloned
+}
+
+func recipientAllowed(recipients *[]string, recipient string) bool {
+	if recipients == nil {
+		return true
+	}
+	for _, allowed := range *recipients {
+		if allowed == recipient {
+			return true
+		}
+	}
+	return false
+}
+
+func sendMessage(tx *bolt.Tx, agentID, sender string, body json.RawMessage, now time.Time) (model.Message, error) {
+	var record agentRecord
+	if err := getRecord(tx.Bucket(bucketAgents), agentID, &record); err != nil {
+		return model.Message{}, err
+	}
+	if record.State == model.StateTerminated {
+		return model.Message{}, errors.New("cannot message a terminated agent")
+	}
+	message, err := appendMessage(tx, agentID, sender, body, now)
+	if err != nil {
+		return model.Message{}, err
+	}
+	if err := appendEvent(tx, model.Event{AgentID: agentID, Actor: sender, Kind: "message.sent", Data: mustJSON(map[string]any{"message_id": message.ID}), CreatedAt: now}); err != nil {
+		return model.Message{}, err
+	}
+	return message, nil
 }
 
 func getRecord(bucket *bolt.Bucket, id string, target *agentRecord) error {
