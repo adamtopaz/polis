@@ -403,6 +403,7 @@ func restrictedSecurityContext() *corev1.SecurityContext {
 		ReadOnlyRootFilesystem:   ptr.To(true),
 		RunAsNonRoot:             ptr.To(true),
 		RunAsUser:                ptr.To[int64](10001),
+		RunAsGroup:               ptr.To[int64](10001),
 		SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 	}
 }

@@ -141,6 +141,12 @@ mount, and credential boundary. `podTemplate` preserves native pod settings
 such as resources, affinity, tolerations, init containers, shared PVC volumes,
 and volume mounts.
 
+By default, the generated agent and credential-init containers run as numeric
+UID:GID `10001:10001`, with supplemental filesystem group `10001`. They cannot
+escalate privileges, have all Linux capabilities dropped, use the runtime
+default seccomp profile, and receive a read-only root filesystem. Writable
+state is limited to mounted volumes such as `/workspace` and `/tmp`.
+
 Private PVCs intentionally have no owner reference. Deleting an `Agent`
 garbage-collects its Deployment but retains its private claims and Polis
 history. Reapplying the same name reconnects that state unless the logical

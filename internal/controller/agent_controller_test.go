@@ -71,6 +71,15 @@ func TestAgentReconcilerCreatesDedicatedRetainedTopology(t *testing.T) {
 		envValue(container.Env, "POLIS_CHARTER") != agent.Spec.Charter || envValue(container.Env, "POLIS_URL") != "http://polis-mailbox" {
 		t.Fatalf("runtime configuration was not projected into the pod: %#v", container)
 	}
+	assertRuntimeIdentity(t, "agent", container.SecurityContext)
+	if len(deployment.Spec.Template.Spec.InitContainers) != 1 {
+		t.Fatalf("init containers = %#v", deployment.Spec.Template.Spec.InitContainers)
+	}
+	workerInit := deployment.Spec.Template.Spec.InitContainers[0]
+	if workerInit.Name != "prepare-worker-auth" {
+		t.Fatalf("worker credential init container = %#v", workerInit)
+	}
+	assertRuntimeIdentity(t, workerInit.Name, workerInit.SecurityContext)
 	encoded, err := json.Marshal(deployment)
 	if err != nil {
 		t.Fatal(err)
@@ -215,4 +224,12 @@ func envValue(environment []corev1.EnvVar, name string) string {
 		}
 	}
 	return ""
+}
+
+func assertRuntimeIdentity(t *testing.T, name string, securityContext *corev1.SecurityContext) {
+	t.Helper()
+	if securityContext == nil || securityContext.RunAsUser == nil || *securityContext.RunAsUser != 10001 ||
+		securityContext.RunAsGroup == nil || *securityContext.RunAsGroup != 10001 {
+		t.Fatalf("%s runtime identity = %#v, want UID:GID 10001:10001", name, securityContext)
+	}
 }
