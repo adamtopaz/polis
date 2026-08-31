@@ -1,4 +1,5 @@
 CONTROLLER_GEN = go run sigs.k8s.io/controller-tools/cmd/controller-gen
+CRD_OPTIONS = crd:generateEmbeddedObjectMeta=true
 
 .PHONY: all build check deploy dev fmt generate install manifests test undeploy uninstall
 
@@ -21,7 +22,7 @@ generate:
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
 
 manifests:
-	$(CONTROLLER_GEN) rbac:roleName=polis-controller crd paths="./..." output:crd:artifacts:config=config/crd/bases
+	$(CONTROLLER_GEN) rbac:roleName=polis-controller $(CRD_OPTIONS) paths="./..." output:crd:artifacts:config=config/crd/bases
 
 test: manifests generate fmt
 	go vet ./...
