@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -46,6 +48,10 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	wakeupSeconds, err := wakeupSecondsFromEnvironment()
+	if err != nil {
+		return err
+	}
 	workerToken, err := token.Load("POLIS_WORKER_TOKEN", *workerTokenFile, "worker")
 	if err != nil {
 		return err
@@ -63,6 +69,7 @@ func run(ctx context.Context, args []string) error {
 		ID:                     *id,
 		Charter:                *charter,
 		AdditionalInstructions: *additionalInstructions,
+		WakeupSeconds:          wakeupSeconds,
 		Runtime:                flags.Args(),
 		Workspace:              *workspace,
 		LeaseDuration:          *lease,
@@ -70,6 +77,18 @@ func run(ctx context.Context, args []string) error {
 		AllowedRecipients:      allowedRecipients,
 		Logger:                 logger,
 	})
+}
+
+func wakeupSecondsFromEnvironment() (*int64, error) {
+	value, configured := os.LookupEnv("POLIS_WAKEUP_SECONDS")
+	if !configured {
+		return nil, nil
+	}
+	seconds, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil || seconds <= 0 {
+		return nil, errors.New("POLIS_WAKEUP_SECONDS must be a positive integer")
+	}
+	return &seconds, nil
 }
 
 func allowedRecipientsFromEnvironment() (*[]string, error) {

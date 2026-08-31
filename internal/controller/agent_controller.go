@@ -53,7 +53,7 @@ var (
 	reservedVolumes = []string{"tmp", "worker-auth-source", "worker-auth"}
 	reservedMounts  = []string{"workspace", "tmp", "worker-auth-source", "worker-auth"}
 	reservedEnv     = []string{
-		"POLIS_URL", "POLIS_AGENT_ID", "POLIS_CHARTER", "POLIS_ADDITIONAL_INSTRUCTIONS", "POLIS_WORKSPACE",
+		"POLIS_URL", "POLIS_AGENT_ID", "POLIS_CHARTER", "POLIS_ADDITIONAL_INSTRUCTIONS", "POLIS_WAKEUP_SECONDS", "POLIS_WORKSPACE",
 		"POLIS_LEASE_DURATION", "POLIS_SHUTDOWN_GRACE", "POLIS_WORKER_TOKEN", "POLIS_WORKER_TOKEN_FILE",
 		"POLIS_ALLOWED_RECIPIENTS",
 	}
@@ -171,6 +171,11 @@ func (r *AgentReconciler) podTemplate(agent *polisv1alpha1.Agent) (corev1.PodTem
 		corev1.EnvVar{Name: "POLIS_SHUTDOWN_GRACE", Value: "10s"},
 		corev1.EnvVar{Name: "POLIS_WORKER_TOKEN_FILE", Value: workerAuthPath + "/token"},
 	}
+	if agent.Spec.Wakeup != nil {
+		workerEnvironment = append(workerEnvironment, corev1.EnvVar{
+			Name: "POLIS_WAKEUP_SECONDS", Value: strconv.FormatInt(*agent.Spec.Wakeup, 10),
+		})
+	}
 	if agent.Spec.Messaging != nil {
 		recipients := agent.Spec.Messaging.AllowedRecipients
 		if recipients == nil {
@@ -226,6 +231,9 @@ func validateAgent(agent *polisv1alpha1.Agent) error {
 	}
 	if agent.Spec.AdditionalInstructions != "" && strings.TrimSpace(agent.Spec.AdditionalInstructions) == "" {
 		return errors.New("spec.additionalInstructions must not be blank")
+	}
+	if agent.Spec.Wakeup != nil && *agent.Spec.Wakeup <= 0 {
+		return errors.New("spec.wakeup must be a positive number of seconds")
 	}
 	if strings.TrimSpace(agent.Spec.Runtime.Image) == "" {
 		return errors.New("spec.runtime.image is required")

@@ -13,9 +13,10 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { loadConfig } from "./config.js";
 import { PolisApiError, PolisClient } from "./polis.js";
-import { polisSystemPrompt, polisTurnPrompt } from "./prompt.js";
+import { polisSystemPrompt, polisTurnPrompt, polisWakeupPrompt } from "./prompt.js";
 import { withMailboxRetry } from "./retry.js";
 import { applyCompactionOverrides } from "./settings.js";
+import { mailboxWaitSeconds, nextWakeupAt, wakeupIsDue } from "./wakeup.js";
 
 let stopping = false;
 let abortActiveSession: (() => Promise<void>) | undefined;
@@ -118,11 +119,43 @@ async function main(): Promise<void> {
       compaction_enabled: compaction.enabled,
       compaction_reserve_tokens: compaction.reserveTokens,
       compaction_keep_recent_tokens: compaction.keepRecentTokens,
+      wakeup_seconds: config.wakeupSeconds,
     });
     log("runtime.waiting", { agent: agent.id });
+    let wakeupAt = nextWakeupAt(Date.now(), config.wakeupSeconds);
     while (!stopping) {
-      const messages = await callPolis(() => polis.messages(30, shutdown.signal));
+      const waitSeconds = mailboxWaitSeconds(Date.now(), wakeupAt);
+      const messages = await callPolis(() => polis.messages(waitSeconds, shutdown.signal));
       if (messages.length === 0) {
+        if (!wakeupIsDue(Date.now(), wakeupAt)) {
+          continue;
+        }
+        await callPolis(() => polis.journal("pi.wakeup.started", {
+          session_id: session.sessionId,
+          idle_seconds: config.wakeupSeconds,
+        }, shutdown.signal));
+        log("wakeup.start", {
+          agent: agent.id,
+          session: session.sessionId,
+          idle_seconds: config.wakeupSeconds,
+        });
+        await session.prompt(polisWakeupPrompt());
+        if (stopping) {
+          return;
+        }
+        if (session.agent.state.errorMessage !== undefined) {
+          throw new Error(session.agent.state.errorMessage);
+        }
+        await callPolis(() => polis.journal("pi.wakeup.completed", {
+          session_id: session.sessionId,
+          session_file: session.sessionFile,
+          model_provider: session.model?.provider,
+          model_id: session.model?.id,
+          idle_seconds: config.wakeupSeconds,
+        }, shutdown.signal));
+        log("wakeup.complete", { agent: agent.id });
+        wakeupAt = nextWakeupAt(Date.now(), config.wakeupSeconds);
+        log("runtime.waiting", { agent: agent.id });
         continue;
       }
       const messageIds = messages.map((message) => message.id);
@@ -156,6 +189,7 @@ async function main(): Promise<void> {
         await callPolis(() => polis.acknowledge(lastMessage, shutdown.signal));
       }
       log("turn.complete", { agent: agent.id, messages_acknowledged: messages.length });
+      wakeupAt = nextWakeupAt(Date.now(), config.wakeupSeconds);
       log("runtime.waiting", { agent: agent.id });
     }
   } catch (error) {

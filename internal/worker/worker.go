@@ -25,6 +25,7 @@ type Config struct {
 	ID                     string
 	Charter                string
 	AdditionalInstructions string
+	WakeupSeconds          *int64
 	Runtime                []string
 	Workspace              string
 	LeaseDuration          time.Duration
@@ -54,6 +55,9 @@ func Run(ctx context.Context, config Config) error {
 	}
 	if config.ShutdownGrace <= 0 {
 		return errors.New("shutdown grace must be positive")
+	}
+	if config.WakeupSeconds != nil && *config.WakeupSeconds <= 0 {
+		return errors.New("wakeup seconds must be positive")
 	}
 	if config.Workspace == "" {
 		return errors.New("workspace is required")
@@ -113,6 +117,9 @@ func runIncarnation(parent context.Context, api *client.Client, config Config, l
 		"POLIS_WORKSPACE=" + workspace,
 		"POLIS_CHARTER_PATH=" + charterPath,
 		"POLIS_ADDITIONAL_INSTRUCTIONS_PATH=" + additionalInstructionsPath,
+	}
+	if config.WakeupSeconds != nil {
+		runtimeEnvironment = append(runtimeEnvironment, fmt.Sprintf("POLIS_WAKEUP_SECONDS=%d", *config.WakeupSeconds))
 	}
 	command.Env = append(withoutControlPlaneCredentials(os.Environ()), runtimeEnvironment...)
 	command.Stdout = os.Stdout
@@ -194,6 +201,7 @@ func withoutControlPlaneCredentials(environment []string) []string {
 			strings.HasPrefix(variable, "POLIS_AGENT_TOKEN=") ||
 			strings.HasPrefix(variable, "POLIS_CHARTER=") ||
 			strings.HasPrefix(variable, "POLIS_ADDITIONAL_INSTRUCTIONS=") ||
+			strings.HasPrefix(variable, "POLIS_WAKEUP_SECONDS=") ||
 			strings.HasPrefix(variable, "POLIS_WORKSPACE=") ||
 			strings.HasPrefix(variable, "POLIS_ALLOWED_RECIPIENTS=") ||
 			strings.HasPrefix(variable, "POLIS_CHARTER_PATH=") ||

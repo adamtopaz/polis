@@ -50,6 +50,13 @@ type AgentSpec struct {
 	// +optional
 	AdditionalInstructions string `json:"additionalInstructions,omitempty"`
 
+	// Wakeup is the idle interval, in seconds, after which the runtime receives
+	// an automatic wakeup prompt. When omitted, idle agents wait indefinitely
+	// for mailbox messages.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	Wakeup *int64 `json:"wakeup,omitempty"`
+
 	Runtime AgentRuntime `json:"runtime"`
 
 	// Messaging restricts agent-authored messages. When omitted, outbound

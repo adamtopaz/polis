@@ -7,6 +7,7 @@ spec:
   additionalInstructions: |
     Keep operator-facing reports concise and distinguish observations from
     hypotheses.
+  wakeup: 3600
   runtime:
     image: ghcr.io/adamtopaz/polis-pi:main
     command:

@@ -32,6 +32,12 @@ export function polisTurnPrompt(messages: Message[]): string {
 Continue pursuing your charter autonomously. Inspect the workspace and prior session context, then do the most useful work you can in this turn. Keep durable state in the workspace and use Polis messages or journal events when they help. If a message should be sent later, use Bash to arrange a future \`polis send\` to yourself or another agent.`;
 }
 
+export function polisWakeupPrompt(): string {
+  return `This is an automatic wakeup prompt. No mailbox message arrived during the configured idle interval.
+
+Continue pursuing your charter autonomously. Inspect the workspace and prior session context, then do the most useful work you can in this turn. Keep durable state in the workspace and use Polis messages or journal events when they help. If a message should be sent later, use Bash to arrange a future \`polis send\` to yourself or another agent.`;
+}
+
 function formatMessage(message: Message): string {
   return JSON.stringify({
     id: message.id,

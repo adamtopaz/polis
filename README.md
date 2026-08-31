@@ -7,17 +7,19 @@ communication, and stays out of how they decide what to do.
 Polis deliberately has no task model, workflow engine, project model, planner,
 or model abstraction. An agent is only:
 
-- a stable identity, charter, and optional additional instructions;
+- a stable identity, charter, optional additional instructions, and optional
+  idle wakeup interval;
 - an arbitrary runtime command;
 - a durable workspace;
 - a durable mailbox and event journal;
 - an `active`, `paused`, or `terminated` desired state.
 
 On Kubernetes, an `Agent` custom resource is the single source of truth for
-identity, charter, optional additional instructions, runtime image and command,
-pod configuration, and private workspace volume reference. Workspace PVCs and
-other storage are ordinary, separately managed Kubernetes resources. Runtime
-state and communication remain in Polis rather than in the Kubernetes API.
+identity, charter, optional additional instructions and wakeup interval,
+runtime image and command, pod configuration, and private workspace volume
+reference. Workspace PVCs and other storage are ordinary, separately managed
+Kubernetes resources. Runtime state and communication remain in Polis rather
+than in the Kubernetes API.
 
 The project is experimental. The current implementation favors a small,
 understandable consistency model over premature scale machinery.
@@ -49,7 +51,8 @@ The reported phase is derived rather than commanded:
 
 Creating an `Agent` resource makes a new agent active but does not send it a
 first message. Its runtime can initialize and wait without invoking an LLM.
-Work begins when an operator or an agent supplies a message.
+Work begins when an operator or agent supplies a message, or when an optional
+idle wakeup interval expires.
 
 ## Components
 
@@ -65,9 +68,9 @@ Work begins when an operator or an agent supplies a message.
 The mailbox stores dynamic agent records, messages, journals, and fenced leases
 in one bbolt database. The `Agent` custom resource remains the only desired
 configuration: the controller projects its charter, additional instructions,
-and runtime argument vector into the dedicated worker pod. The mailbox never
-stores them. There is no intervening shell or workflow engine and no
-multi-agent worker mode.
+optional wakeup interval, and runtime argument vector into the dedicated worker
+pod. The mailbox never stores them. There is no intervening shell or workflow
+engine and no multi-agent worker mode.
 
 An authenticated worker registers its stable identity in the mailbox on its
 first lease acquisition. Consequently, `kubectl get agents.polis.dev` lists
@@ -83,6 +86,7 @@ POLIS_AGENT_TOKEN
 POLIS_WORKSPACE
 POLIS_CHARTER_PATH
 POLIS_ADDITIONAL_INSTRUCTIONS_PATH
+POLIS_WAKEUP_SECONDS       # only when spec.wakeup is configured
 ```
 
 `POLIS_AGENT_TOKEN` is both a short-lived API capability and an incarnation
@@ -122,6 +126,7 @@ spec:
   additionalInstructions: |
     Keep operator-facing reports concise and distinguish observations from
     hypotheses.
+  wakeup: 3600
   runtime:
     image: ghcr.io/adamtopaz/polis-pi:main
     command:
@@ -155,17 +160,26 @@ kubectl -n polis describe agents.polis.dev researcher
 
 The reconciler creates exactly one `Recreate` Deployment with one agent
 container. It injects the worker command, charter, optional additional
-instructions, runtime command, mailbox connection, `/workspace` mount, and
-credential boundary. The required pod volume is named `workspace`, but its
-volume source and PVC name are entirely operator-controlled. `podTemplate`
-preserves native pod settings such as resources, affinity, tolerations, init
-containers, other volumes, and volume mounts.
+instructions and wakeup interval, runtime command, mailbox connection,
+`/workspace` mount, and credential boundary. The required pod volume is named
+`workspace`, but its volume source and PVC name are entirely
+operator-controlled. `podTemplate` preserves native pod settings such as
+resources, affinity, tolerations, init containers, other volumes, and volume
+mounts.
 
 `spec.charter` defines the agent's durable purpose. The optional
 `spec.additionalInstructions` field adds more specific guidance at the end of
 the appended Pi system prompt, after Polis's standard guidance. Updating either
 field changes the Agent generation and replaces its runtime pod; its workspace
 and Pi session remain.
+
+The optional `spec.wakeup` field is a positive integer number of seconds. Once
+the Pi runtime is idle for that long without receiving a mailbox message, it
+runs an automatic wakeup prompt as a new turn. A real message takes priority if
+one is waiting at the deadline. The idle deadline starts again after every
+message or wakeup turn settles. Omitting `wakeup` disables automatic wakeups,
+so an idle runtime waits indefinitely without making LLM calls. Updating the
+field replaces the runtime pod while preserving its workspace and Pi session.
 
 `spec.messaging.allowedRecipients` is a directional, exact-ID allow-list for
 messages authored by this agent. The example permits `researcher` to message
@@ -313,17 +327,20 @@ incarnation:
 2. append the stable agent identity, charter, and any additional instructions
    to Pi's system prompt;
 3. long-poll the durable mailbox without making LLM calls;
-4. supply each queued batch to Pi as one trigger;
+4. supply each queued batch to Pi as one trigger, or issue an automatic prompt
+   when the optional idle wakeup interval expires with no queued message;
 5. let Pi reason and use its read, Bash, edit, write, grep, find, and ls tools
    until the turn reaches a stop reason;
 6. journal completion, acknowledge the batch, and return to mailbox waiting in
    the same process and session.
 
 Messages arriving during a turn remain queued for the next turn. From Bash, the
-model can use `polis` to communicate or journal decisions. Polis does not
-schedule messages. An agent that wants a later trigger can use Bash to arrange
-for `polis send "$POLIS_AGENT_ID" JSON` to run later; it may target another agent
-instead. The agent owns the choice and durability of that mechanism.
+model can use `polis` to communicate or journal decisions. A configured wakeup
+is a runtime-generated prompt, not a mailbox message or general-purpose
+scheduler. An agent that wants a specific message sent later can use Bash to
+arrange for `polis send "$POLIS_AGENT_ID" JSON` to run later; it may target
+another agent instead. The agent owns the choice and durability of that
+mechanism.
 
 Select a model with the `Agent` runtime command:
 
@@ -369,12 +386,16 @@ advances the mailbox cursor only after the whole turn succeeds. If an
 incarnation disappears mid-turn, its replacement receives the same
 unacknowledged batch.
 
+Automatic turns are journaled as `pi.wakeup.started` and
+`pi.wakeup.completed`. They have no mailbox message to acknowledge.
+
 Tools may therefore have made partial durable changes before a retry. Agent
 work should inspect existing state and make consequential operations idempotent
 when practical.
 
-An idle restart does not cause an LLM turn. The replacement incarnation resumes
-the same workspace and most recent Pi session, then waits for a message. A
+An idle restart does not immediately cause an LLM turn. The replacement
+incarnation resumes the same workspace and most recent Pi session, then waits
+for a message and starts a fresh wakeup interval when one is configured. A
 controller outage does not interrupt existing agents or messaging. A mailbox
 outage is retried by a running Pi runtime; if it lasts past the lease deadline,
 the worker fences the runtime and reacquires after the mailbox returns.

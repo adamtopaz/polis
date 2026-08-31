@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { polisSystemPrompt, polisTurnPrompt } from "../src/prompt.js";
+import { polisSystemPrompt, polisTurnPrompt, polisWakeupPrompt } from "../src/prompt.js";
 import type { Agent, Message } from "../src/polis.js";
 
 const agent: Agent = {
@@ -48,4 +48,11 @@ test("turn prompt serializes unread mailbox bodies", () => {
 
 test("turn prompt handles an empty mailbox", () => {
   assert.match(polisTurnPrompt([]), /no unread messages/i);
+});
+
+test("wakeup prompt identifies the idle trigger and asks for autonomous work", () => {
+  const prompt = polisWakeupPrompt();
+  assert.match(prompt, /automatic wakeup prompt/i);
+  assert.match(prompt, /no mailbox message arrived/i);
+  assert.match(prompt, /continue pursuing your charter autonomously/i);
 });

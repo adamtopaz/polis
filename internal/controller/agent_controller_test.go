@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -69,6 +70,7 @@ func TestAgentReconcilerCreatesDedicatedTopologyFromSuppliedWorkspace(t *testing
 	if !slices.Equal(container.Args, []string{"--", "/bin/polis-pi-agent", "--thinking", "high"}) ||
 		envValue(container.Env, "POLIS_CHARTER") != agent.Spec.Charter ||
 		envValue(container.Env, "POLIS_ADDITIONAL_INSTRUCTIONS") != agent.Spec.AdditionalInstructions ||
+		envValue(container.Env, "POLIS_WAKEUP_SECONDS") != "120" ||
 		envValue(container.Env, "POLIS_URL") != "http://polis-mailbox" {
 		t.Fatalf("runtime configuration was not projected into the pod: %#v", container)
 	}
@@ -158,6 +160,30 @@ func TestAgentAdditionalInstructionsAreOptionalButNotBlank(t *testing.T) {
 	agent.Spec.AdditionalInstructions = " \n\t"
 	if err := validateAgent(agent); err == nil {
 		t.Fatal("blank additional instructions were accepted")
+	}
+}
+
+func TestAgentWakeupIsOptionalButPositive(t *testing.T) {
+	agent := testAgent()
+	agent.Spec.Wakeup = nil
+	if err := validateAgent(agent); err != nil {
+		t.Fatalf("omitted wakeup was rejected: %v", err)
+	}
+	template, err := (&AgentReconciler{}).podTemplate(agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasEnv(template.Spec.Containers[0].Env, "POLIS_WAKEUP_SECONDS") {
+		t.Fatal("omitted wakeup was projected into the pod")
+	}
+
+	agent.Spec.Wakeup = ptr.To[int64](0)
+	if err := validateAgent(agent); err == nil {
+		t.Fatal("zero wakeup was accepted")
+	}
+	agent.Spec.Wakeup = ptr.To[int64](-1)
+	if err := validateAgent(agent); err == nil {
+		t.Fatal("negative wakeup was accepted")
 	}
 }
 
@@ -258,6 +284,7 @@ func testAgent() *polisv1alpha1.Agent {
 		Spec: polisv1alpha1.AgentSpec{
 			Charter:                "Research useful things.",
 			AdditionalInstructions: "Keep reports concise.",
+			Wakeup:                 ptr.To[int64](120),
 			Runtime: polisv1alpha1.AgentRuntime{
 				Image:   "ghcr.io/adamtopaz/polis-pi:main",
 				Command: []string{"/bin/polis-pi-agent", "--thinking", "high"},
@@ -265,9 +292,10 @@ func testAgent() *polisv1alpha1.Agent {
 			PodTemplate: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
 				Containers: []corev1.Container{{
 					Name: "agent",
-					Env: []corev1.EnvVar{{
-						Name: "POLIS_ADDITIONAL_INSTRUCTIONS", Value: "forged instructions",
-					}},
+					Env: []corev1.EnvVar{
+						{Name: "POLIS_ADDITIONAL_INSTRUCTIONS", Value: "forged instructions"},
+						{Name: "POLIS_WAKEUP_SECONDS", Value: "999"},
+					},
 					VolumeMounts: []corev1.VolumeMount{{Name: "shared-research", MountPath: "/workspace/shared"}},
 				}},
 				Volumes: []corev1.Volume{
@@ -304,6 +332,15 @@ func envValue(environment []corev1.EnvVar, name string) string {
 		}
 	}
 	return ""
+}
+
+func hasEnv(environment []corev1.EnvVar, name string) bool {
+	for _, variable := range environment {
+		if variable.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func assertRuntimeIdentity(t *testing.T, name string, securityContext *corev1.SecurityContext) {

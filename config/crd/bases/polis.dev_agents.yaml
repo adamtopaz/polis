@@ -8600,6 +8600,14 @@ spec:
                 - command
                 - image
                 type: object
+              wakeup:
+                description: |-
+                  Wakeup is the idle interval, in seconds, after which the runtime receives
+                  an automatic wakeup prompt. When omitted, idle agents wait indefinitely
+                  for mailbox messages.
+                format: int64
+                minimum: 1
+                type: integer
             required:
             - charter
             - podTemplate

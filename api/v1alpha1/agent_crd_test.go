@@ -48,6 +48,13 @@ func TestAgentCRDPreservesEmbeddedTemplateMetadata(t *testing.T) {
 	if additionalInstructions.MinLength == nil || *additionalInstructions.MinLength != 1 {
 		t.Fatalf("additionalInstructions does not reject empty values: %#v", additionalInstructions.MinLength)
 	}
+	wakeup := requiredProperty(t, spec, "wakeup")
+	if slices.Contains(spec.Required, "wakeup") {
+		t.Fatalf("wakeup is required: %#v", spec.Required)
+	}
+	if wakeup.Type != "integer" || wakeup.Minimum == nil || *wakeup.Minimum != 1 {
+		t.Fatalf("wakeup is not a positive integer: %#v", wakeup)
+	}
 	if _, found := spec.Properties["volumeClaimTemplates"]; found {
 		t.Fatal("removed volumeClaimTemplates remains in the CRD")
 	}

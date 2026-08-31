@@ -10,6 +10,7 @@ test("loadConfig derives durable Pi paths", () => {
     POLIS_WORKSPACE: "/work/agent-1",
     POLIS_CHARTER_PATH: "/work/agent-1/.polis/charter.md",
     POLIS_ADDITIONAL_INSTRUCTIONS_PATH: "/work/agent-1/.polis/additional-instructions.md",
+    POLIS_WAKEUP_SECONDS: "120",
     POLIS_PI_MODEL: "anthropic/claude-sonnet-4-5:high",
     POLIS_PI_AUTH_FILE: "./auth.json",
   });
@@ -22,6 +23,7 @@ test("loadConfig derives durable Pi paths", () => {
     "/work/agent-1/.polis/additional-instructions.md",
   );
   assert.equal(config.model, "anthropic/claude-sonnet-4-5:high");
+  assert.equal(config.wakeupSeconds, 120);
   assert.equal(config.authFile, path.resolve("./auth.json"));
 });
 
@@ -58,6 +60,7 @@ test("thinking can be selected without overriding the restored model", () => {
   assert.equal(config.model, undefined);
   assert.equal(config.thinking, "low");
   assert.equal(config.additionalInstructionsPath, undefined);
+  assert.equal(config.wakeupSeconds, undefined);
 });
 
 test("runtime flags reject missing, invalid, and unknown values", () => {
@@ -83,4 +86,19 @@ test("runtime flags reject missing, invalid, and unknown values", () => {
 
 test("loadConfig requires lease environment", () => {
   assert.throws(() => loadConfig({}), /POLIS_URL is required/);
+});
+
+test("wakeup seconds must be a positive integer when configured", () => {
+  const environment = {
+    POLIS_URL: "http://polis.test",
+    POLIS_AGENT_TOKEN: "lease-token",
+    POLIS_WORKSPACE: "/work/agent-1",
+    POLIS_CHARTER_PATH: "/work/agent-1/.polis/charter.md",
+  };
+  for (const value of ["0", "-1", "1.5", "later"]) {
+    assert.throws(
+      () => loadConfig({ ...environment, POLIS_WAKEUP_SECONDS: value }),
+      /POLIS_WAKEUP_SECONDS must be a positive integer/,
+    );
+  }
 });

@@ -18,6 +18,7 @@ func TestControlPlaneCredentialsAreNotPassedToAgentRuntime(t *testing.T) {
 		`POLIS_ALLOWED_RECIPIENTS=["beta"]`,
 		"POLIS_ADDITIONAL_INSTRUCTIONS=forged instructions",
 		"POLIS_ADDITIONAL_INSTRUCTIONS_PATH=/tmp/forged-instructions",
+		"POLIS_WAKEUP_SECONDS=999",
 	}
 	filtered := withoutControlPlaneCredentials(environment)
 	for _, credential := range environment[1:5] {
@@ -36,7 +37,8 @@ func TestControlPlaneCredentialsAreNotPassedToAgentRuntime(t *testing.T) {
 	}
 	for _, variable := range filtered {
 		if variable == "POLIS_ADDITIONAL_INSTRUCTIONS=forged instructions" ||
-			variable == "POLIS_ADDITIONAL_INSTRUCTIONS_PATH=/tmp/forged-instructions" {
+			variable == "POLIS_ADDITIONAL_INSTRUCTIONS_PATH=/tmp/forged-instructions" ||
+			variable == "POLIS_WAKEUP_SECONDS=999" {
 			t.Fatalf("forged additional instructions reached runtime: %#v", filtered)
 		}
 	}

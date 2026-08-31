@@ -6,6 +6,7 @@ export interface Config {
   workspace: string;
   charterPath: string;
   additionalInstructionsPath?: string;
+  wakeupSeconds?: number;
   agentDir: string;
   sessionDir: string;
   model?: string;
@@ -35,6 +36,7 @@ export function loadConfig(
   const workspace = path.resolve(required(environment, "POLIS_WORKSPACE"));
   const charterPath = path.resolve(required(environment, "POLIS_CHARTER_PATH"));
   const additionalInstructionsPath = optional(environment.POLIS_ADDITIONAL_INSTRUCTIONS_PATH);
+  const wakeup = optional(environment.POLIS_WAKEUP_SECONDS);
   const model = runtime.model ?? optional(environment.POLIS_PI_MODEL);
   const authFile = optional(environment.POLIS_PI_AUTH_FILE);
 
@@ -46,6 +48,9 @@ export function loadConfig(
     ...(additionalInstructionsPath === undefined
       ? {}
       : { additionalInstructionsPath: path.resolve(additionalInstructionsPath) }),
+    ...(wakeup === undefined
+      ? {}
+      : { wakeupSeconds: parsePositiveInteger("POLIS_WAKEUP_SECONDS", wakeup) }),
     agentDir: path.join(workspace, ".polis", "pi-agent"),
     sessionDir: path.join(workspace, ".polis", "pi-sessions"),
     ...(model === undefined ? {} : { model }),
