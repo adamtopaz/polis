@@ -75,6 +75,58 @@ func TestAgentLifecycle(t *testing.T) {
 	}
 }
 
+func TestAcknowledgementCursorIsMonotonic(t *testing.T) {
+	st := openTestStore(t)
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	st.now = func() time.Time { return now }
+	lease, err := st.Acquire("alpha", "worker-1", 30*time.Second, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	messageN, err := st.SendMessage("alpha", "operator", json.RawMessage(`{"sequence":"N"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivered, err := st.Messages(lease.Token, 100)
+	if err != nil || len(delivered) != 1 || delivered[0].ID != messageN.ID {
+		t.Fatalf("delivery N = %#v, %v", delivered, err)
+	}
+
+	messageNPlusOne, err := st.SendMessage("alpha", "operator", json.RawMessage(`{"sequence":"N+1"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AckMessages(lease.Token, messageNPlusOne.ID); err != nil {
+		t.Fatalf("manual ack N+1: %v", err)
+	}
+	if err := st.AckMessages(lease.Token, messageN.ID); err != nil {
+		t.Fatalf("older end-of-turn ack N: %v", err)
+	}
+	if err := st.AckMessages(lease.Token, messageNPlusOne.ID); err != nil {
+		t.Fatalf("equal ack N+1: %v", err)
+	}
+	if err := st.AckMessages(lease.Token, messageNPlusOne.ID+1); err == nil || err.Error() != "message does not exist" {
+		t.Fatalf("forward nonexistent ack returned %v", err)
+	}
+
+	messageNPlusTwo, err := st.SendMessage("alpha", "operator", json.RawMessage(`{"sequence":"N+2"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivered, err = st.Messages(lease.Token, 100)
+	if err != nil || len(delivered) != 1 || delivered[0].ID != messageNPlusTwo.ID {
+		t.Fatalf("delivery after older ack = %#v, %v", delivered, err)
+	}
+	if err := st.AckMessages("invalid-token", messageN.ID); !errors.Is(err, ErrInvalidLease) {
+		t.Fatalf("invalid token ack returned %v", err)
+	}
+	now = now.Add(31 * time.Second)
+	if err := st.AckMessages(lease.Token, messageNPlusTwo.ID); !errors.Is(err, ErrInvalidLease) {
+		t.Fatalf("expired token ack returned %v", err)
+	}
+}
+
 func TestAcquireRegistersAndIsPinnedToAgent(t *testing.T) {
 	st := openTestStore(t)
 	alphaLease, err := st.Acquire("alpha", "alpha-pod", 30*time.Second, nil)

@@ -138,6 +138,82 @@ func TestHTTPAgentLifecycle(t *testing.T) {
 	}
 }
 
+func TestHTTPAcknowledgementCursorIsMonotonic(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "polis.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	server := httptest.NewServer(New(database, slog.New(slog.NewTextHandler(io.Discard, nil)), "operator-secret", "worker-secret").Handler())
+	defer server.Close()
+
+	ctx := context.Background()
+	operatorAPI := client.NewOperator(server.URL, "operator-secret")
+	lease, ok, err := client.NewWorker(server.URL, "worker-secret").Acquire(ctx, "ack-agent", "test-worker", 30*time.Second, 0, nil)
+	if err != nil || !ok {
+		t.Fatalf("acquire = %#v, %v, %v", lease, ok, err)
+	}
+	agentAPI := client.New(server.URL)
+	messageN, err := operatorAPI.SendControlMessage(ctx, "ack-agent", "operator", json.RawMessage(`{"sequence":"N"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivered, err := agentAPI.Messages(ctx, lease.Token)
+	if err != nil || len(delivered) != 1 || delivered[0].ID != messageN.ID {
+		t.Fatalf("delivery N = %#v, %v", delivered, err)
+	}
+
+	messageNPlusOne, err := operatorAPI.SendControlMessage(ctx, "ack-agent", "operator", json.RawMessage(`{"sequence":"N+1"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := agentAPI.AckMessages(ctx, lease.Token, messageNPlusOne.ID); err != nil {
+		t.Fatalf("manual ack N+1: %v", err)
+	}
+	if err := agentAPI.AckMessages(ctx, lease.Token, messageN.ID); err != nil {
+		t.Fatalf("older end-of-turn ack N: %v", err)
+	}
+	if err := agentAPI.AckMessages(ctx, lease.Token, messageNPlusOne.ID); err != nil {
+		t.Fatalf("equal ack N+1: %v", err)
+	}
+	if err := agentAPI.AckMessages(ctx, lease.Token, messageNPlusOne.ID+1); err == nil {
+		t.Fatal("forward nonexistent ack succeeded")
+	} else {
+		var apiError *client.Error
+		if !errors.As(err, &apiError) || apiError.Status != http.StatusBadRequest || apiError.Message != "message does not exist" {
+			t.Fatalf("forward nonexistent ack returned %T %v", err, err)
+		}
+	}
+	if err := agentAPI.AckMessages(ctx, "invalid-token", messageN.ID); err == nil {
+		t.Fatal("invalid token ack succeeded")
+	} else {
+		var apiError *client.Error
+		if !errors.As(err, &apiError) || apiError.Status != http.StatusUnauthorized {
+			t.Fatalf("invalid token ack returned %T %v", err, err)
+		}
+	}
+
+	messageNPlusTwo, err := operatorAPI.SendControlMessage(ctx, "ack-agent", "operator", json.RawMessage(`{"sequence":"N+2"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivered, err = agentAPI.Messages(ctx, lease.Token)
+	if err != nil || len(delivered) != 1 || delivered[0].ID != messageNPlusTwo.ID {
+		t.Fatalf("delivery after older ack = %#v, %v", delivered, err)
+	}
+	if _, err := operatorAPI.SetState(ctx, "ack-agent", model.StatePaused); err != nil {
+		t.Fatal(err)
+	}
+	if err := agentAPI.AckMessages(ctx, lease.Token, messageNPlusTwo.ID); err == nil {
+		t.Fatal("revoked lease ack succeeded")
+	} else {
+		var apiError *client.Error
+		if !errors.As(err, &apiError) || apiError.Status != http.StatusUnauthorized {
+			t.Fatalf("revoked lease ack returned %T %v", err, err)
+		}
+	}
+}
+
 func TestHTTPMessagingPolicy(t *testing.T) {
 	database, err := store.Open(filepath.Join(t.TempDir(), "polis.db"))
 	if err != nil {

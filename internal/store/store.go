@@ -307,8 +307,8 @@ func (s *Store) AckMessages(token string, through uint64) error {
 		if err != nil {
 			return err
 		}
-		if through < record.MailboxCursor {
-			return errors.New("mailbox cursor cannot move backwards")
+		if through <= record.MailboxCursor {
+			return nil
 		}
 		mailbox := tx.Bucket(bucketMessages).Bucket([]byte(record.ID))
 		if mailbox == nil || mailbox.Get(sequenceKey(through)) == nil {
