@@ -86,7 +86,7 @@ func runAgent(ctx context.Context, config Config) error {
 		if !ok {
 			continue
 		}
-		log.Info("incarnation acquired", "agent", lease.Agent.ID)
+		log.Info("incarnation acquired")
 		runIncarnation(ctx, api, config, lease, log)
 		if !wait(ctx, incarnationRetryDelay) {
 			return ctx.Err()
@@ -146,7 +146,7 @@ func runIncarnation(parent context.Context, api *client.Client, config Config, l
 				detail = err.Error()
 			}
 			reportExit(api, lease.Token, detail, log)
-			log.Info("incarnation exited", "agent", lease.Agent.ID, "detail", detail)
+			log.Info("incarnation exited", "detail", detail)
 			return
 		case <-ticker.C:
 			heartbeat, err := api.Heartbeat(parent, lease.Token, config.LeaseDuration)
@@ -154,21 +154,21 @@ func runIncarnation(parent context.Context, api *client.Client, config Config, l
 				var apiError *client.Error
 				if errors.As(err, &apiError) && apiError.Status == 401 {
 					stop(command, done, config.ShutdownGrace)
-					log.Info("incarnation fence revoked", "agent", lease.Agent.ID)
+					log.Info("incarnation fence revoked")
 					return
 				}
-				log.Warn("heartbeat failed", "agent", lease.Agent.ID, "error", err)
+				log.Warn("heartbeat failed", "error", err)
 				continue
 			}
 			if !heartbeat.Continue {
 				stop(command, done, config.ShutdownGrace)
-				log.Info("incarnation stopped by mailbox", "agent", lease.Agent.ID)
+				log.Info("incarnation stopped by mailbox")
 				return
 			}
 			resetTimer(deadline, time.Until(heartbeat.ExpiresAt))
 		case <-deadline.C:
 			stop(command, done, config.ShutdownGrace)
-			log.Warn("incarnation stopped after lease expired", "agent", lease.Agent.ID)
+			log.Warn("incarnation stopped after lease expired")
 			return
 		case <-parent.Done():
 			stop(command, done, config.ShutdownGrace)
