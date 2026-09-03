@@ -9,6 +9,7 @@ export interface Config {
   wakeupSeconds?: number;
   agentDir: string;
   sessionDir: string;
+  piFdPath: string;
   model?: string;
   thinking?: ThinkingLevel;
   compactionReserveTokens?: number;
@@ -39,6 +40,7 @@ export function loadConfig(
   const wakeup = optional(environment.POLIS_WAKEUP_SECONDS);
   const model = runtime.model ?? optional(environment.POLIS_PI_MODEL);
   const authFile = optional(environment.POLIS_PI_AUTH_FILE);
+  const piFdPath = required(environment, "POLIS_PI_FD_PATH");
 
   return {
     polisUrl,
@@ -53,6 +55,7 @@ export function loadConfig(
       : { wakeupSeconds: parsePositiveInteger("POLIS_WAKEUP_SECONDS", wakeup) }),
     agentDir: path.join(workspace, ".polis", "pi-agent"),
     sessionDir: path.join(workspace, ".polis", "pi-sessions"),
+    piFdPath,
     ...(model === undefined ? {} : { model }),
     ...(runtime.thinking === undefined ? {} : { thinking: runtime.thinking }),
     ...(runtime.compactionReserveTokens === undefined

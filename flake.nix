@@ -68,6 +68,11 @@
         system:
         let
           pkgs = pkgsFor system;
+          unexecutableFd = pkgs.runCommand "fd-unexecutable" { } ''
+            mkdir -p $out/bin
+            printf '#!/bin/sh\nexit 0\n' > $out/bin/fd
+            chmod 0444 $out/bin/fd
+          '';
         in
         pkgs.buildNpmPackage {
           pname = "polis-pi-runtime";
@@ -78,10 +83,16 @@
           npmDepsHash = "sha256-t6EVHb9TX/vJfM3A6BSgKJP+8iBQHQBL+vGNK5JRawc=";
 
           nativeBuildInputs = [ pkgs.makeWrapper ];
+          nativeCheckInputs = [
+            pkgs.fd
+            pkgs.ripgrep
+          ];
           npmBuildScript = "build";
           doCheck = true;
           checkPhase = ''
             runHook preCheck
+            export POLIS_PI_FD_PATH=${pkgs.fd}/bin/fd
+            export POLIS_TEST_UNEXECUTABLE_FD=${unexecutableFd}/bin/fd
             node --test dist/test/*.test.js
             runHook postCheck
           '';
@@ -91,7 +102,9 @@
             mkdir -p $out/lib/polis-pi-runtime $out/bin
             cp -r dist node_modules package.json $out/lib/polis-pi-runtime/
             makeWrapper ${pkgs.nodejs_22}/bin/node $out/bin/polis-pi-agent \
-              --add-flags "$out/lib/polis-pi-runtime/dist/src/main.js"
+              --add-flags "$out/lib/polis-pi-runtime/dist/src/main.js" \
+              --set POLIS_PI_FD_PATH ${pkgs.fd}/bin/fd \
+              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.fd ]}
             runHook postInstall
           '';
 
@@ -301,6 +314,7 @@
             packages = [
               polisctl
               pkgs.curl
+              pkgs.fd
               pkgs.go
               pkgs.gopls
               pkgs.gotools
@@ -309,7 +323,11 @@
               pkgs.kubectl
               pkgs.kustomize
               pkgs.nodejs_22
+              pkgs.ripgrep
             ];
+            shellHook = ''
+              export POLIS_PI_FD_PATH=${pkgs.fd}/bin/fd
+            '';
           };
         }
       );

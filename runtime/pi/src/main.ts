@@ -3,15 +3,12 @@
 import { chmod, copyFile, mkdir, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  createAgentSession,
-  DefaultResourceLoader,
-  ModelRuntime,
-  resolveCliModel,
-  SessionManager,
-  SettingsManager,
-} from "@earendil-works/pi-coding-agent";
 import { loadConfig } from "./config.js";
+import {
+  configurePiAgentDir,
+  importPiCodingAgent,
+  reconcileManagedFd,
+} from "./pi-runtime.js";
 import { PolisApiError, PolisClient } from "./polis.js";
 import { polisSystemPrompt, polisTurnPrompt, polisWakeupPrompt } from "./prompt.js";
 import { withMailboxRetry } from "./retry.js";
@@ -32,10 +29,17 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 
 async function main(): Promise<void> {
   const config = loadConfig(process.env, process.argv.slice(2));
-  await Promise.all([
-    mkdir(config.agentDir, { recursive: true }),
-    mkdir(config.sessionDir, { recursive: true }),
-  ]);
+  const agentDir = configurePiAgentDir(config.agentDir);
+  await reconcileManagedFd(config.workspace, agentDir, config.piFdPath);
+  const {
+    createAgentSession,
+    DefaultResourceLoader,
+    ModelRuntime,
+    resolveCliModel,
+    SessionManager,
+    SettingsManager,
+  } = await importPiCodingAgent(agentDir);
+  await mkdir(config.sessionDir, { recursive: true });
 
   const polis = new PolisClient(config.polisUrl, config.agentToken);
   const callPolis = <T>(operation: () => Promise<T>): Promise<T> => withMailboxRetry(operation, {

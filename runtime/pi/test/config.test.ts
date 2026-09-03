@@ -9,6 +9,7 @@ test("loadConfig derives durable Pi paths", () => {
     POLIS_AGENT_TOKEN: "lease-token",
     POLIS_WORKSPACE: "/work/agent-1",
     POLIS_CHARTER_PATH: "/work/agent-1/.polis/charter.md",
+    POLIS_PI_FD_PATH: "/nix/store/00000000000000000000000000000000-fd-test/bin/fd",
     POLIS_ADDITIONAL_INSTRUCTIONS_PATH: "/work/agent-1/.polis/additional-instructions.md",
     POLIS_WAKEUP_SECONDS: "120",
     POLIS_PI_MODEL: "anthropic/claude-sonnet-4-5:high",
@@ -18,6 +19,7 @@ test("loadConfig derives durable Pi paths", () => {
   assert.equal(config.polisUrl, "http://polis.test");
   assert.equal(config.agentDir, "/work/agent-1/.polis/pi-agent");
   assert.equal(config.sessionDir, "/work/agent-1/.polis/pi-sessions");
+  assert.equal(config.piFdPath, "/nix/store/00000000000000000000000000000000-fd-test/bin/fd");
   assert.equal(
     config.additionalInstructionsPath,
     "/work/agent-1/.polis/additional-instructions.md",
@@ -33,6 +35,7 @@ test("runtime flags override the environment model and select thinking", () => {
     POLIS_AGENT_TOKEN: "lease-token",
     POLIS_WORKSPACE: "/work/agent-1",
     POLIS_CHARTER_PATH: "/work/agent-1/.polis/charter.md",
+    POLIS_PI_FD_PATH: "/nix/store/00000000000000000000000000000000-fd-test/bin/fd",
     POLIS_PI_MODEL: "anthropic/environment-model:medium",
   }, [
     "--model",
@@ -55,6 +58,7 @@ test("thinking can be selected without overriding the restored model", () => {
     POLIS_AGENT_TOKEN: "lease-token",
     POLIS_WORKSPACE: "/work/agent-1",
     POLIS_CHARTER_PATH: "/work/agent-1/.polis/charter.md",
+    POLIS_PI_FD_PATH: "/nix/store/00000000000000000000000000000000-fd-test/bin/fd",
   }, ["--thinking", "low"]);
 
   assert.equal(config.model, undefined);
@@ -69,6 +73,7 @@ test("runtime flags reject missing, invalid, and unknown values", () => {
     POLIS_AGENT_TOKEN: "lease-token",
     POLIS_WORKSPACE: "/work/agent-1",
     POLIS_CHARTER_PATH: "/work/agent-1/.polis/charter.md",
+    POLIS_PI_FD_PATH: "/nix/store/00000000000000000000000000000000-fd-test/bin/fd",
   };
 
   assert.throws(() => loadConfig(environment, ["--model"]), /--model requires a value/);
@@ -88,12 +93,22 @@ test("loadConfig requires lease environment", () => {
   assert.throws(() => loadConfig({}), /POLIS_URL is required/);
 });
 
+test("loadConfig requires the wrapper-provided fd path", () => {
+  assert.throws(() => loadConfig({
+    POLIS_URL: "http://polis.test",
+    POLIS_AGENT_TOKEN: "lease-token",
+    POLIS_WORKSPACE: "/work/agent-1",
+    POLIS_CHARTER_PATH: "/work/agent-1/.polis/charter.md",
+  }), /POLIS_PI_FD_PATH is required/);
+});
+
 test("wakeup seconds must be a positive integer when configured", () => {
   const environment = {
     POLIS_URL: "http://polis.test",
     POLIS_AGENT_TOKEN: "lease-token",
     POLIS_WORKSPACE: "/work/agent-1",
     POLIS_CHARTER_PATH: "/work/agent-1/.polis/charter.md",
+    POLIS_PI_FD_PATH: "/nix/store/00000000000000000000000000000000-fd-test/bin/fd",
   };
   for (const value of ["0", "-1", "1.5", "later"]) {
     assert.throws(
